@@ -186,7 +186,7 @@ sub add_peer{
     my $model = $params{'model'};
     my $vrf_ep_id = $params{'vrf_ep_id'};
 
-    my $res = $db->execute_query("insert into vrf_ep_peer (vrf_ep_id, peer_ip, local_ip, peer_asn, md5_key, state) VALUES (?,?,?,?,?,?)",[$vrf_ep_id, $model->{'peer_ip'}, $model->{'local_ip'}, $model->{'peer_asn'}, $model->{'md5_key'}, 'active']);
+    my $res = $db->execute_query("insert into vrf_ep_peer (vrf_ep_id, peer_ip, local_ip, peer_asn, md5_key, state, ip_version) VALUES (?,?,?,?,?,?,?)",[$vrf_ep_id, $model->{'peer_ip'}, $model->{'local_ip'}, $model->{'peer_asn'}, $model->{'md5_key'}, 'active', $model->{ip_version}]);
 
     if(!defined($res)){
         my $error = $db->get_error();

@@ -11,7 +11,7 @@ sub new{
     my $that  = shift;
     my $class = ref($that) || $that;
 
-    my $logger = Log::Log4perl->get_logger("OESS.Endpoint");
+    my $logger = Log::Log4perl->get_logger("OESS.Peer");
 
     my %args = (
         vrf_peer_id => undef,
@@ -48,6 +48,7 @@ sub _build_from_model{
     $self->{'peer_asn'} = $self->{'model'}->{'asn'};
     $self->{'md5_key'} = $self->{'model'}->{'key'};
     $self->{'local_ip'} = $self->{'model'}->{'local_ip'};
+    $self->{'ip_version'} = $self->{'model'}->{'ip_version'};
 }
 
 sub from_hash{
@@ -60,6 +61,7 @@ sub from_hash{
     $self->{'vrf_ep_id'} = $hash->{'vrf_ep_id'};
     $self->{'md5_key'} = $hash->{'md5_key'};
     $self->{'state'} = $hash->{'state'};
+    $self->{'ip_version'} = $hash->{'ip_version'};
     $self->{'local_ip'} = $hash->{'local_ip'};
 
 }
@@ -74,6 +76,7 @@ sub to_hash{
     $obj->{'vrf_ep_id'} = $self->{'vrf_ep_id'};
     $obj->{'md5_key'} = $self->{'md5_key'};
     $obj->{'state'} = $self->{'state'};
+    $obj->{'ip_version'} = $self->{'ip_version'};
     $obj->{'local_ip'} = $self->{'local_ip'};
 
     return $obj;
@@ -92,6 +95,11 @@ sub local_ip{
 sub peer_asn{
     my $self = shift;
     return $self->{'peer_asn'};
+}
+
+sub ip_version{
+    my $self = shift;
+    return $self->{'ip_version'};
 }
 
 sub md5_key{

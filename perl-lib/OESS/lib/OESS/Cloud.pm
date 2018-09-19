@@ -16,13 +16,14 @@ any information related to new cloud services is recorded in the
 resulting endpoint list. The resulting endpoint list should be used as
 a replacement for the parent VRF's endpoints.
 
-    my $setup_endpoints = Cloud::setup_endpoints('vrf1', $vrf->endpoints, 123456789);
+    my $setup_endpoints = Cloud::setup_endpoints('vrf1', 55038, $vrf->endpoints);
     $vrf->endpoints($setup_endpoints);
     $vrf->update_db();
 
 =cut
 sub setup_endpoints {
     my $vrf_name   = shift;
+    my $local_asn  = shift;
     my $endpoints  = shift;
     my $result     = [];
 
@@ -49,7 +50,7 @@ sub setup_endpoints {
 
         } elsif ($ep->interface()->cloud_interconnect_type eq 'aws-hosted-vinterface') {
             my $amazon_addr   = undef;
-            my $asn           = 55038;
+            my $asn           = $local_asn;
             my $auth_key      = undef;
             my $customer_addr = undef;
             my $ip_version    = 'ipv6';
@@ -57,7 +58,6 @@ sub setup_endpoints {
             my $peer = $ep->peers()->[0];
             if (defined $peer) {
                 $amazon_addr   = $peer->peer_ip;
-                $asn           = $peer->peer_asn;
                 $auth_key      = $peer->md5_key;
                 $customer_addr = $peer->local_ip;
 

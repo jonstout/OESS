@@ -17,6 +17,22 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 async function showEndpointSelectionModal(endpoint, options) {
+    console.log(endpoint);
+    console.log(options);
+
+    // Clear all pre-existing values from form
+    document.querySelector('#entity-index').value = null;
+    document.querySelector('#entity-id').value = null;
+    document.querySelector('#entity-name').value = null;
+    document.querySelector('#entity-node').value = null;
+    document.querySelector('#entity-interface').value = null;
+    document.querySelector('#endpoint-vlans').value = null;
+    document.querySelector('#entity-vlans').value = null;
+    document.querySelector('#endpoint-bandwidth').value = null;
+    document.querySelector('#entity-bandwidth').value = null;
+    document.querySelector('#endpoint-cloud-account-id').value = null;
+    document.querySelector('#entity-cloud-account-id').value = null;
+
     if (endpoint) {
         document.querySelector('#endpoint-select-header').innerHTML = 'Modify Network Endpoint';
 
@@ -47,9 +63,6 @@ async function showEndpointSelectionModal(endpoint, options) {
 
             // Must call after endpoint-select-interface's value set
             await loadInterfaceCloudAccountInput();
-
-            console.log(`${endpoint.node} - ${endpoint.interface}`);
-            console.log(`${endpoint.node} - ${endpoint.name}`);
         }
 
         document.querySelector('#endpoint-vlans').value = endpoint.tag;
@@ -69,8 +82,6 @@ async function showEndpointSelectionModal(endpoint, options) {
 
     } else {
         document.querySelector('#endpoint-select-header').innerHTML = 'Add Network Endpoint';
-
-        console.log('adding endpoint');
 
         loadEntities();
         loadEntityVLANs();
@@ -177,7 +188,7 @@ async function loadEntityVLANs(entity) {
 
 async function loadEntityCloudAccountInput(entity) {
     console.log('loading entity account');
-
+    console.log(entity);
     if (!entity) {
         console.log('skipping entity account');
         return null;
@@ -187,7 +198,7 @@ async function loadEntityCloudAccountInput(entity) {
     let interconnect_type = null;
 
     for (let i = 0; i < entity.interfaces.length; i++) {
-        if (typeof entity.interfaces[i].cloud_interconnect_id === 'undefined') {
+        if (typeof entity.interfaces[i].cloud_interconnect_id === 'undefined' || entity.interfaces[i].cloud_interconnect_id === '') {
             continue;
         }
 

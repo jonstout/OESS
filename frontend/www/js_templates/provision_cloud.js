@@ -149,12 +149,18 @@ function newPeering(index) {
         oessPeerIP.reportValidity();
         return null;
     }
+    let ipVersion = document.querySelector(`#new-peering-form-${index} .ip-version`);
+    if (!ipVersion.validity.valid) {
+        ipVersion.reportValidity();
+        return null;
+    }
 
     let peering = {
         asn: asn.value,
         key: key.value,
         oessPeerIP: oessPeerIP.value,
-        yourPeerIP: yourPeerIP.value
+        yourPeerIP: yourPeerIP.value,
+        ipVersion: ipVersion.value
     };
 
     let endpoints = JSON.parse(sessionStorage.getItem('endpoints'));
@@ -180,8 +186,9 @@ function loadSelectedEndpointList() {
   let endpoints = JSON.parse(sessionStorage.getItem('endpoints'));
   let selectedEndpointList = '';
 
-  console.log(endpoints);
   endpoints.forEach(function(endpoint, index) {
+          console.log(endpoint);
+
           let endpointName = '';
           if ('entity_id' in endpoint) {
               endpointName = `${endpoint.entity} ${endpoint.node} <small>${endpoint.name} ${endpoint.tag}</small>`;
@@ -193,6 +200,7 @@ function loadSelectedEndpointList() {
           endpoint.peerings.forEach(function(peering, peeringIndex) {
                   peerings += `
 <tr>
+  <td>${peering.ipVersion}</td>
   <td>${peering.asn}</td>
   <td>${peering.yourPeerIP}</td>
   <td>${peering.key}</td>
@@ -217,15 +225,10 @@ function loadSelectedEndpointList() {
   <div class="table-responsive">
     <div id="endpoints">
       <table class="table">
-        <thead><tr><th>Your ASN</th><th>Your IP</th><th>Your BGP Key</th><th>OESS IP</th><th></th></tr></thead>
+        <thead><tr><th>Protocol</th><th>Your ASN</th><th>Your IP</th><th>Your BGP Key</th><th>OESS IP</th><th></th></tr></thead>
         <tbody>
           ${peerings}
-          <tr id="new-peering-form-${index}">
-            <td><input class="form-control bgp-asn" type="number" required /></td>
-            <td><input class="form-control your-peer-ip" type="text" required /></td>
-            <td><input class="form-control bgp-key" type="text" /></td>
-            <td><input class="form-control oess-peer-ip" type="text" required /></td>
-            <td><button class="btn btn-success btn-sm" class="form-control" type="button" onclick="newPeering(${index})">&nbsp;<span class="glyphicon glyphicon-plus"></span>&nbsp;</button></td>
+          ${endpoint.cloud_account_id ? newCloudPeeringForm(index) : newPeeringForm(index)}
           </tr>
         </tbody>
       </table>
@@ -246,4 +249,30 @@ function loadSelectedEndpointList() {
           let oessPeerIP = document.querySelector(`#new-peering-form-${index} .oess-peer-ip`);
           asIPv4CIDRorIPv6CIDR(oessPeerIP);
   });
+}
+
+function newPeeringForm(index) {
+    return `
+        <tr id="new-peering-form-${index}">
+          <td><select class="form-control ip-version"><option value="ipv4">ipv4</option><option value="ipv6">ipv6</option></select></td>
+          <td><input class="form-control bgp-asn" type="number" required /></td>
+          <td><input class="form-control your-peer-ip" type="text" required /></td>
+          <td><input class="form-control bgp-key" type="text" required /></td>
+          <td><input class="form-control oess-peer-ip" type="text" required /></td>
+          <td><button class="btn btn-success btn-sm" class="form-control" type="button" onclick="newPeering(${index})">&nbsp;<span class="glyphicon glyphicon-plus"></span>&nbsp;</button></td>
+        </tr>
+`;
+}
+
+function newCloudPeeringForm(index) {
+    return `
+        <tr id="new-peering-form-${index}">
+          <td><select class="form-control ip-version"><option value="ipv4">ipv4</option><option value="ipv6">ipv6</option></select></td>
+          <td><input class="form-control bgp-asn" type="number" disabled /></td>
+          <td><input class="form-control your-peer-ip" type="text" disabled /></td>
+          <td><input class="form-control bgp-key" type="text" disabled /></td>
+          <td><input class="form-control oess-peer-ip" type="text" disabled /></td>
+          <td><button class="btn btn-success btn-sm" class="form-control" type="button" onclick="newPeering(${index})">&nbsp;<span class="glyphicon glyphicon-plus"></span>&nbsp;</button></td>
+        </tr>
+`;
 }

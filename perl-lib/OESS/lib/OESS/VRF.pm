@@ -264,6 +264,12 @@ sub create{
 
         #validate IP addresses for peerings
         foreach my $peer (@{$ep->peers()}){
+            if (defined($ep->interface()->{cloud_interconnect_id})) {
+                # Ignore IP Addresses on cloud connections. We use the
+                # cloud provider's generated addresses.
+                next;
+            }
+
             my $peer_ip = NetAddr::IP->new($peer->peer_ip());
             my $local_ip = NetAddr::IP->new($peer->local_ip());
             if(!$local_ip->contains($peer_ip)){
@@ -339,6 +345,12 @@ sub update {
         }
 
         foreach my $peer (@{$endpoint->peers()}){
+            if (defined($endpoint->cloud_connection_id)) {
+                # Ignore IP Addresses on cloud connections. We use the
+                # cloud provider's generated addresses.
+                next;
+            }
+
             my $peer_ip = NetAddr::IP->new($peer->peer_ip());
             my $local_ip = NetAddr::IP->new($peer->local_ip());
 

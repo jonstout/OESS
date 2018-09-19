@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 
+use Data::Dumper;
 use Log::Log4perl;
 
 use GRNOC::WebService::Method;
@@ -251,6 +252,12 @@ sub provision_vrf{
                 return;
             }
             $peerings->{"$obj->{node} $obj->{interface} $peering->{local_ip}"} = 1;
+
+            if ($peering->{local_ip} =~ /^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$/) {
+                $peering->{ip_version} = 'ipv4';
+            } else {
+                $peering->{ip_version} = 'ipv6';
+            }
         }
 
         push(@{$model->{'endpoints'}}, $obj);
@@ -334,7 +341,7 @@ sub provision_vrf{
         }
         OESS::Cloud::cleanup_endpoints($to_remove);
 
-        my $setup_endpoints = OESS::Cloud::setup_endpoints($vrf->name, $vrf->endpoints);
+        my $setup_endpoints = OESS::Cloud::setup_endpoints($vrf->name, $vrf->local_asn, $vrf->endpoints);
         $vrf->endpoints($setup_endpoints);
         $vrf->update_db();
 
@@ -359,7 +366,7 @@ sub provision_vrf{
         return;
     }
 
-    my $setup_endpoints = OESS::Cloud::setup_endpoints($vrf->name, $vrf->endpoints);
+    my $setup_endpoints = OESS::Cloud::setup_endpoints($vrf->name, $vrf->local_asn, $vrf->endpoints);
     $vrf->endpoints($setup_endpoints);
     $vrf->update_db();
 

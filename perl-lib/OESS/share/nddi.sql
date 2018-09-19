@@ -1007,6 +1007,7 @@ CREATE TABLE `vrf_ep_peer` (
   `peer_asn` int(10) NOT NULL,
   `vrf_ep_id` int(11) DEFAULT NULL,
   `state` enum('active','decom') DEFAULT NULL,
+  `ip_version` enum('ipv4','ipv6') DEFAULT NULL,
   `local_ip` varchar(255) DEFAULT NULL,
   `md5_key` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`vrf_ep_peer_id`),
