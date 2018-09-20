@@ -129,4 +129,57 @@ sub cleanup_endpoints {
     return 1;
 }
 
+=head2 create_bgp_peer
+
+=cut
+
+sub create_bgp_peer {
+    my $interconnect_id = shift;
+    my $vinterface_id = shift;
+    my $asn = shift;
+    my $auth_key = shift;
+    my $amazon_addr = shift;
+    my $customer_addr = shift;
+
+    my $addr_family = 'ipv6';
+    if ($customer_addr =~ /^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$/) {
+        $addr_family = 'ipv4';
+    }
+
+    my $aws = OESS::Cloud::AWS->new();
+    return $aws->create_bgp_peer(
+        $interconnect_id,
+        $vinterface_id,
+        $addr_family,
+        $amazon_addr,
+        $asn,
+        $auth_key,
+        $customer_addr
+    );
+}
+
+=head2 delete_bgp_peer
+
+delete_bgp_peer removes the peer identified by C<$asn> and
+C<$customer_address> from the virtual interface C<$vinterface_id>.
+
+    my $asn = 1;
+    my $customer_address = '192.168.2.2/31';
+    my $interconnect_id = 123;
+    my $vinterface_id = 456;
+
+    my $ok = Cloud::delete_bgp_peer($asn, $customer_address, $vinterface_id);
+
+=cut
+
+sub delete_bgp_peer {
+    my $asn = shift;
+    my $customer_address = shift;
+    my $interconnect_id = shift;
+    my $vinterface_id = shift;
+
+    my $aws = OESS::Cloud::AWS->new();
+    return $aws->delete_bgp_peer($asn, $customer_address, $interconnect_id, $vinterface_id);
+}
+
 return 1;

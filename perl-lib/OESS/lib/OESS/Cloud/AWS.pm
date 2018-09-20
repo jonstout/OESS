@@ -158,4 +158,68 @@ sub delete_vinterface {
     return $resp;
 }
 
+=head2 create_bgp_peer
+=cut
+sub create_bgp_peer {
+    my $self = shift;
+    my $interconnect_id = shift;
+    my $vinterface_id = shift;
+    my $addr_family = shift;
+    my $amazon_addr = shift;
+    my $asn = shift;
+    my $auth_key = shift;
+    my $customer_addr = shift;
+
+    $ENV{'AWS_ACCESS_KEY'} = $self->{connections}->{$interconnect_id}->{access_key};
+    $ENV{'AWS_SECRET_KEY'} = $self->{connections}->{$interconnect_id}->{secret_key};
+
+    my $dc = Paws->service(
+        'DirectConnect',
+        region => $self->{connections}->{$interconnect_id}->{region}
+    );
+    my $resp = $dc->CreateBGPPeer(
+        NewBGPPeer => {
+            AddressFamily => $addr_family,
+            AmazonAddress => $amazon_addr,
+            Asn => $asn,
+            AuthKey => $auth_key,
+            CustomerAddress => $customer_addr
+        },
+        VirtualInterfaceId => $vinterface_id
+    );
+
+    warn Dumper($resp);
+
+    $self->{logger}->info("Added BGP Peer for AWS Virtual Interface $resp->{ConnectionId} on $self->{connections}->{$interconnect_id}->{region} for $resp->{OwnerAccount}.");
+    return $resp;
+}
+
+=head2 delete_bgp_peer
+=cut
+sub delete_bgp_peer {
+    my $self = shift;
+    my $asn = shift;
+    my $customer_address = shift;
+    my $interconnect_id = shift;
+    my $vinterface_id = shift;
+
+    $ENV{'AWS_ACCESS_KEY'} = $self->{connections}->{$interconnect_id}->{access_key};
+    $ENV{'AWS_SECRET_KEY'} = $self->{connections}->{$interconnect_id}->{secret_key};
+
+    my $dc = Paws->service(
+        'DirectConnect',
+        region => $self->{connections}->{$interconnect_id}->{region}
+    );
+    my $resp = $dc->DeleteBGPPeer(
+        Asn => $asn,
+        CustomerAddress => $customer_address,
+        VirtualInterfaceId => $vinterface_id
+    );
+
+    warn Dumper($resp);
+
+    $self->{logger}->info("Removed BGP Peer from AWS Virtual Interface $resp->{ConnectionId} on $self->{connections}->{$interconnect_id}->{region} for $resp->{OwnerAccount} with ASN $asn.");
+    return $resp;
+}
+
 1;
