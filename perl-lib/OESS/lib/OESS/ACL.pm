@@ -186,7 +186,7 @@ sub vlan_allowed {
     die 'Required argument `workgroup_id` is missing.' if !defined $args->{workgroup_id};
     die 'Required argument `vlan` is missing.' if !defined $args->{vlan};
 
-    if ($self->{workgroup_id} != $args->{workgroup_id}) {
+    if (defined $self->{workgroup_id} && $self->{workgroup_id} != $args->{workgroup_id}) {
         # Implicit denial
         return -1;
     }
