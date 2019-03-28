@@ -106,6 +106,17 @@ sub main{
                 {title => "New private network", url => "#"}
             ];
         }
+
+        case "common" {
+            $title              = "Private network details";
+            $filename           = "html_templates/common.html";
+            $current_breadcrumb = "Private network details";
+            $breadcrumbs        = [
+                {title => "Welcome",              url => "?action=welcome"},
+                {title => "Common", url => "#"}
+            ];
+        }
+
         case "view_l3vpn" {
             $title              = "Private network details";
             $filename           = "html_templates/view_l3vpn.html";
