@@ -1218,10 +1218,6 @@ sub get_config_to_remove{
                 }
             }
 
-            if ($type eq 'L2CCC') {
-                $ri_dels .= "<instance operation='delete'><name>OESS-L2VPN-$circuit_id</name></instance>";
-            }
-
             if($type eq 'L2VPN'){
                 my $sites = $xp->find(' ./c:protocols/c:l2vpn/c:site', $ri);
                 foreach my $site (@$sites){
