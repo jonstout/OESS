@@ -1386,29 +1386,29 @@ sub get_config_to_remove{
     }
 
     if($lsp_dels ne '' || $path_dels ne ''){
-	$delete .= "<protocols><mpls>";
-	if($lsp_dels ne ''){
-	    $delete .= $lsp_dels;
-	}
-	
-	if($path_dels ne ''){
-	    $delete .= $path_dels;
-	}
-	$delete .= "</mpls></protocols>";
+        $delete .= "<protocols><mpls>";
+        if($lsp_dels ne ''){
+            $delete .= $lsp_dels;
+        }
+
+        if($path_dels ne ''){
+            $delete .= $path_dels;
+        }
+        $delete .= "</mpls></protocols>";
     }
 
 
     my $ris_dels = "";
 
     my $remote_interface_switches = $xp->find( '/base:rpc-reply/c:configuration/c:protocols/c:connections/c:remote-interface-switch');
-    
-    foreach my $ris (@{$remote_interface_switches}){
-	my $name = $xp->findvalue( './c:name', $ris);
+    foreach my $ris (@{$remote_interface_switches}) {
+        my $name = $xp->findvalue( './c:name', $ris);
         if($name =~ /^OESS/){
-	    $name =~ /OESS\-\S+\-(\d+)/;
-	    my $circuit_id = $1;
-	    #figure out the right bit!
-	    if(!$self->_is_active_circuit($circuit_id, $circuits)){
+            $name =~ /OESS\-\S+\-(\d+)/;
+            my $circuit_id = $1;
+
+            # figure out the right bit!
+            if(!$self->_is_active_circuit($circuit_id, $circuits)){
                 $ris_dels .= "<remote-interface-switch operation='delete'><name>" . $name . "</name></remote-interface-switch>";
             }
         }

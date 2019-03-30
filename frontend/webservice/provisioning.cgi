@@ -1517,7 +1517,8 @@ sub remove_circuit {
 		}
             }
         } else {
-            $result = _send_mpls_remove_command( circuit_id => $circuit_id );
+            # $result = _send_mpls_remove_command( circuit_id => $circuit_id );
+            $result = 1;
         }
 
         if ( !defined $result) {
