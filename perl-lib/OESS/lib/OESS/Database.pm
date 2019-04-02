@@ -4378,6 +4378,8 @@ The internal MySQL primary key int identifier for this circuit.
 
 =cut
 
+
+# TODO Make a vrf endpoints version of this crap
 sub get_circuit_endpoints {
     my $self = shift;
     my %args = @_;
@@ -4451,8 +4453,10 @@ sub get_circuit_endpoints {
 
 =head2 get_path_links
 
-=cut
+get_path_links returns a list of C<(link_id, name)> pairs associated
+with path C<path_id>.
 
+=cut
 sub get_path_links{
     my $self = shift;
     my %args = @_;
@@ -4472,9 +4476,62 @@ sub get_path_links{
 }
 
 
+=head2 get_path_links_by_id
+
+=cut
+sub get_path_links_by_id {
+    my $self = shift;
+    my $args = {
+        path_id => undef,
+        @_
+    };
+
+    my $dbh = $self->{'dbh'};
+
+    my $query = "select link.name, link.link_id, node_a.name as node_a, node_inst_a.loopback_address as node_a_loopback, if_a.name as interface_a, if_a.interface_id as interface_a_id, if_a.port_number as port_no_a, node_z.name as node_z, node_inst_z.loopback_address as node_z_loopback,if_z.name as interface_z, if_z.interface_id as interface_z_id, if_z.port_number as port_no_z, link_inst.ip_a as ip_a, link_inst.ip_z as ip_z from link " .
+	" join link_path_membership on link_path_membership.link_id = link.link_id " .
+	"  and link_path_membership.end_epoch = -1 " .
+        " join link_instantiation link_inst on link.link_id = link_inst.link_id and link_inst.end_epoch = -1".
+	" join path on path.path_id = link_path_membership.path_id and path.path_id = ? " .
+	" join interface if_a on link_inst.interface_a_id = if_a.interface_id ".
+ 	" join interface if_z on link_inst.interface_z_id = if_z.interface_id ".
+	" join node node_a on if_a.node_id = node_a.node_id ".
+	" join node_instantiation node_inst_a on node_inst_a.node_id = node_a.node_id and node_inst_a.end_epoch=-1".
+	" join node node_z on if_z.node_id = node_z.node_id ".
+	" join node_instantiation node_inst_z on node_inst_z.node_id = node_z.node_id and node_inst_z.end_epoch=-1";
+
+    my $sth = $self->_prepare_query($query) or return;
+    $sth->execute($args->{path_id});
+
+    my @results;
+
+    while (my $row = $sth->fetchrow_hashref()){
+        push (@results, {
+            link_id     => $row->{'link_id'},
+            name        => $row->{'name'},
+            node_a      => $row->{'node_a'},
+            node_a_loopback => $row->{'node_a_loopback'},
+            port_no_a   => $row->{'port_no_a'},
+            interface_a => $row->{'interface_a'},
+            interface_a_id => $row->{'interface_a_id'},
+            node_z      => $row->{'node_z'},
+            node_z_loopback => $row->{'node_z_loopback'},
+            port_no_z   => $row->{'port_no_z'},
+            interface_z => $row->{'interface_z'},
+            interface_z_id => $row->{'interface_z_id'},
+            ip_a        => $row->{'ip_a'},
+            ip_z        => $row->{'ip_z'}
+        });
+    }
+
+    return \@results;
+}
+
+
 =head2 get_circuit_links
 
-Returns an array of hashes containing information about the path links for the circuit. If no type is given, it assumes primary path links.
+Returns an array of hashes containing information about the path links
+for the circuit. If no type is given, it assumes primary path links.
 
 =over
 

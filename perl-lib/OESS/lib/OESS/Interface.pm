@@ -28,10 +28,7 @@ sub new{
 
     $self->{'logger'} = $logger;
 
-    if(!defined($self->{'db'})){
-        $self->{'logger'}->error("No Database Object specified");
-        return;
-    }
+    $self->{'logger'}->debug("Optional argument `db` is missing.") if !defined $self->{db};
 
     my $ok = $self->_fetch_from_db();
     if (!$ok) {

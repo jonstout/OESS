@@ -54,38 +54,25 @@ B<Example 2:>
     my $endpoint = OESS::Endpoint->new(db => $db, type => 'vrf', model => $json);
 
 =cut
-sub new{
-    my $that  = shift;
-    my $class = ref($that) || $that;
-
-    my $logger = Log::Log4perl->get_logger("OESS.Endpoint");
-
-    my %args = (
+sub new {
+    my $class = shift;
+    my $args  = {
         details => undef,
         vrf_id => undef,
+        vrf_endpoint_id => undef,
         db => undef,
+        logger => Log::Log4perl->get_logger("OESS.Endpoint"),
         @_
-    );
+    };
 
-    my $self = \%args;
-    
-    bless $self, $class;
+    my $self = bless $args, $class;
 
-    $self->{'logger'} = $logger;
+    $self->{'logger'}->debug("Optional argument `db` is missing.") if !defined $self->{db};
 
-    if(!defined($self->{'db'})){
-        $self->{'logger'}->error("No Database Object specified");
-        return;
-    }
-
-    if(!defined($self->{'vrf_endpoint_id'}) || $self->{'vrf_endpoint_id'} == -1){
-        
+    if (!defined $self->{'vrf_endpoint_id'} || $self->{'vrf_endpoint_id'} == -1) {
         $self->_build_from_model();
-
-    }else{
-
+    } else {
         $self->_fetch_from_db();
-
     }
 
     return $self;
@@ -142,35 +129,33 @@ sub _build_from_model{
         }
     }
 
-    if($self->{'type'} eq 'vrf'){
-        $self->{'peers'} = [];
-        my $last_octet = 2;
+    $self->{'peers'} = [];
+    my $last_octet = 2;
 
-        foreach my $peer (@{$self->{'model'}->{'peerings'}}){
-            # Peerings are auto-generated for cloud connection
-            # endpoints. The user has only the option to select the ip
-            # version used for peering.
+    foreach my $peer (@{$self->{'model'}->{'peerings'}}){
+        # Peerings are auto-generated for cloud connection
+        # endpoints. The user has only the option to select the ip
+        # version used for peering.
 
-            if (defined $self->{cloud_account_id} && $self->{cloud_account_id} ne '') {
-                my $rand = rand();
+        if (defined $self->{cloud_account_id} && $self->{cloud_account_id} ne '') {
+            my $rand = rand();
 
-                $peer->{asn} = 64512;
-                $peer->{key} = md5_hex($rand);
-                if ($peer->{version} == 4) {
-                    $peer->{local_ip} = '172.31.254.' . $last_octet . '/31';
-                    $peer->{peer_ip}  = '172.31.254.' . ($last_octet + 1) . '/31';
-                } else {
-                    $peer->{local_ip} = 'fd28:221e:28fa:61d3::' . $last_octet . '/127';
-                    $peer->{peer_ip}  = 'fd28:221e:28fa:61d3::' . ($last_octet + 1) . '/127';
-                }
-
-                # Assuming we use .2 and .3 the first time around. We
-                # can use .4 and .5 on the next peering.
-                $last_octet += 2;
+            $peer->{asn} = 64512;
+            $peer->{key} = md5_hex($rand);
+            if ($peer->{version} == 4) {
+                $peer->{local_ip} = '172.31.254.' . $last_octet . '/31';
+                $peer->{peer_ip}  = '172.31.254.' . ($last_octet + 1) . '/31';
+            } else {
+                $peer->{local_ip} = 'fd28:221e:28fa:61d3::' . $last_octet . '/127';
+                $peer->{peer_ip}  = 'fd28:221e:28fa:61d3::' . ($last_octet + 1) . '/127';
             }
 
-            push(@{$self->{'peers'}}, OESS::Peer->new(db => $self->{'db'}, model => $peer, vrf_ep_peer_id => -1));
+            # Assuming we use .2 and .3 the first time around. We
+            # can use .4 and .5 on the next peering.
+            $last_octet += 2;
         }
+
+        push(@{$self->{'peers'}}, OESS::Peer->new(db => $self->{'db'}, model => $peer, vrf_ep_peer_id => -1));
     }
 
     #unit will be selected at creation....
