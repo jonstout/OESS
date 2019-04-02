@@ -1063,7 +1063,8 @@ sub xml_configuration {
             my $has_ipv6 = 0;
             
             foreach my $bgp (@{$i->{'peers'}}){
-                #strip off the cidr                                                                                                                                                                                                                                                                                                                  #192.168.1.0/24
+                # strip off the cidr
+                # 192.168.1.0/24
                 my $peer_ip = $bgp->{'peer_ip'};
                 $peer_ip =~ s/\/\d+//g;
                 
@@ -1113,9 +1114,8 @@ sub xml_configuration {
         $vars->{'switch'} = {name => $self->{'name'}, loopback => $self->{'loopback_addr'}};
         $vars->{'prefix_limit'} = $vrf->{'prefix_limit'};
         
-        $self->{'logger'}->error("VARS: " . Dumper($vars));
-        
-        if($vrf->{'state'} eq 'active'){
+        $self->{'logger'}->debug("xml_configuration vars: " . Dumper($vars));
+        if ($vrf->{'state'} eq 'active') {
             $self->{'tt'}->process($self->{'template_dir'} . "/L3VPN/ep_config.xml", $vars, \$xml);
         }
         
