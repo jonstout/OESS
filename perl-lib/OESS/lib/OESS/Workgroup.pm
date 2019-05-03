@@ -15,28 +15,26 @@ sub new{
     my $that  = shift;
     my $class = ref($that) || $that;
 
-    my $logger = Log::Log4perl->get_logger("OESS.Workgroup");
-
-    my %args = (
-        vrf_peer_id => undef,
+    my $self = {
         db => undef,
-        just_display => 0,
-        link_status => undef,
+        model => undef,
+        logger => Log::Log4perl->get_logger("OESS.Workgroup"),
         @_
-        );
-
-    my $self = \%args;
-
+    };
     bless $self, $class;
 
-    $self->{'logger'} = $logger;
+    if (!defined $self->{db}) {
+        $self->{logger}->debug('Optional argument `db` is missing. Cannot save object to database.');
+    }
 
-    if(!defined($self->{'db'})){
-        $self->{'logger'}->error("No Database Object specified");
+    if (defined $self->{db} && defined $self->{workgroup_id}) {
+        $self->_fetch_from_db();
+    } elsif (!defined $self->{model}) {
+        $self->{logger}->debug('Optional argument `model` is missing.');
         return;
     }
 
-    $self->_fetch_from_db();
+    $self->from_hash($self->{model});
 
     return $self;
 }
@@ -66,26 +64,31 @@ sub from_hash{
 =cut
 sub to_hash{
     my $self = shift;
+    my $args = {
+        shallow => 0,
+        @_
+    };
 
-    my $obj = {};
+    my $obj = {
+        workgroup_id => $self->workgroup_id(),
+        name         => $self->name(),
+        type         => $self->type(),
+        external_id  => $self->external_id(),
+        max_circuits => $self->max_circuits()
+    };
 
-    $obj->{'workgroup_id'} = $self->workgroup_id();
-    $obj->{'name'} = $self->name();
-    $obj->{'type'} = $self->type();
+    if (!$args->{shallow}) {
+        $obj->{'users'} = [];
+        foreach my $user (@{$self->users()}){
+            push(@{$self->{'users'}}, $user->to_hash());
+        }
 
-    #$obj->{'users'} = ();
-    $obj->{'external_id'} = $self->external_id();
-    $obj->{'max_circuits'} = $self->max_circuits();    
-    $obj->{'interfaces'} = ();;
-
-    foreach my $user (@{$self->users()}){
-        push(@{$self->{'users'}}, $user->to_hash());
+        $obj->{'interfaces'} = [];
+        foreach my $int (@{$self->interfaces()}){
+            push(@{$obj->{'interfaces'}}, $int->to_hash());
+        }
     }
-   
-    foreach my $int (@{$self->interfaces()}){
-        push(@{$obj->{'interfaces'}}, $int->to_hash());
-    }
- 
+
     return $obj;
 }
 

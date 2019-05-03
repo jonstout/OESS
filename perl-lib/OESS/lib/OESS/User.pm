@@ -14,31 +14,56 @@ sub new{
     my $that  = shift;
     my $class = ref($that) || $that;
 
-    my $logger = Log::Log4perl->get_logger("OESS.User");
-
-    my %args = (
-        vrf_peer_id => undef,
+    my $self = {
+        user_id => undef,
+        username => undef,
         db => undef,
-        just_display => 0,
-        link_status => undef,
+        model => undef,
+        logger => Log::Log4perl->get_logger("OESS.User"),
         @_
-        );
-
-    my $self = \%args;
-
+    };
     bless $self, $class;
 
-    $self->{'logger'} = $logger;
+    if (!defined $self->{db}) {
+        $self->{logger}->debug('Optional argument `db` is missing. Cannot save object to database.');
+    }
 
-    if(!defined($self->{'db'})){
-        $self->{'logger'}->error("No Database Object specified");
+    if (defined $self->{db} && (defined $self->{user_id} || defined $self->{username})) {
+        eval {
+            $self->{model} = OESS::DB::User::get(
+                db => $self->{db},
+                user_id => $self->{user_id},
+                username => $self->{username}
+            );
+        };
+        if ($@) {
+            $self->{logger}->error("Couldn't load user: $@");
+            return;
+        }
+        if (!defined $self->{model}) {
+            $self->{logger}->error("Couldn't find user.");
+            return;
+        }
+
+        #if (!$self->{shallow}) {
+            eval {
+                $self->{model}->{workgroups} = OESS::DB::User::get_workgroups(
+                    db => $self->{db},
+                    user_id => $self->{user_id}
+                );
+            };
+            if ($@) {
+                $self->{logger}->warn("Couldn't load workgroups for user $self->{user_id}.");
+                $self->{model}->{workgroups} = [];
+            }
+        #}
+
+    } elsif (!defined $self->{model}) {
+        $self->{logger}->debug('Optional argument `model` is missing.');
         return;
     }
 
-    my $ok = $self->_fetch_from_db();
-    if (!$ok) {
-        return;
-    }
+    $self->from_hash($self->{model});
 
     return $self;
 }
@@ -48,23 +73,28 @@ sub new{
 =cut
 sub to_hash{
     my $self = shift;
+    my $args = {
+        shallow => 0,
+        @_
+    };
 
-    my $obj = {};
+    my $obj = {
+        user_id    => $self->user_id(),
+        username   => $self->username(),
+        first_name => $self->first_name(),
+        last_name  => $self->last_name(),
+        email      => $self->email(),
+        type       => $self->type(),
+        is_admin   => $self->is_admin()
+    };
 
-    $obj->{'first_name'} = $self->first_name();
-    $obj->{'last_name'} = $self->last_name();
-    $obj->{'email'} = $self->email();
-    $obj->{'user_id'} = $self->user_id();
-    
-    my @wgs;
-    foreach my $wg (@{$self->workgroups()}){
-        push(@wgs, $wg->to_hash());
+    if (!$args->{shallow}) {
+        $obj->{workgroups} = [];
+        foreach my $wg (@{$self->workgroups()}){
+            push @{$obj->{workgroups}}, $wg->to_hash(shallow => 1);
+        }
     }
-    
-    $obj->{'is_admin'} = $self->is_admin();
-    $obj->{'type'} = $self->type();
-    $obj->{'workgroups'} = \@wgs;
-    
+
     return $obj;
 }
 
@@ -75,13 +105,18 @@ sub from_hash{
     my $self = shift;
     my $hash = shift;
 
-    $self->{'user_id'} = $hash->{'user_id'};
-    $self->{'first_name'} = $hash->{'given_names'};
-    $self->{'last_name'} = $hash->{'family_name'};
-    $self->{'email'} = $hash->{'email'};
-    $self->{'workgroups'} = $hash->{'workgroups'};
-    $self->{'type'} = $hash->{'type'};
-    $self->{'is_admin'} = $hash->{'is_admin'};
+    $self->{user_id}    = $hash->{user_id};
+    $self->{username}   = $hash->{username};
+    $self->{first_name} = $hash->{first_name};
+    $self->{last_name}  = $hash->{last_name};
+    $self->{email}      = $hash->{email};
+    $self->{type}       = $hash->{type};
+    $self->{is_admin}   = $hash->{is_admin};
+
+    $self->{'workgroups'} = [];
+    foreach my $model (@{$hash->{workgroups}}) {
+        push @{$self->{workgroups}}, OESS::Workgroup->new(db => $self->{db}, model => $model);
+    }
 
     return 1;
 }
@@ -92,12 +127,8 @@ sub from_hash{
 sub _fetch_from_db{
     my $self = shift;
 
-    my $user = OESS::DB::User::fetch(db => $self->{'db'}, user_id => $self->{'user_id'});
-    if (!defined $user) {
-        return;
-    }
 
-    return $self->from_hash($user);
+    return;
 }
 
 =head2 first_name
@@ -123,7 +154,14 @@ sub last_name{
 sub user_id{
     my $self = shift;
     return $self->{'user_id'};
-    
+}
+
+=head2 username
+
+=cut
+sub username{
+    my $self = shift;
+    return $self->{'username'};
 }
 
 =head2 workgroups
