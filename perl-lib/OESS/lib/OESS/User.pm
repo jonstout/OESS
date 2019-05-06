@@ -45,26 +45,12 @@ sub new{
             return;
         }
 
-        #if (!$self->{shallow}) {
-            eval {
-                $self->{model}->{workgroups} = OESS::DB::User::get_workgroups(
-                    db => $self->{db},
-                    user_id => $self->{user_id}
-                );
-            };
-            if ($@) {
-                $self->{logger}->warn("Couldn't load workgroups for user $self->{user_id}.");
-                $self->{model}->{workgroups} = [];
-            }
-        #}
-
     } elsif (!defined $self->{model}) {
         $self->{logger}->debug('Optional argument `model` is missing.');
         return;
     }
 
     $self->from_hash($self->{model});
-
     return $self;
 }
 
@@ -73,25 +59,21 @@ sub new{
 =cut
 sub to_hash{
     my $self = shift;
-    my $args = {
-        shallow => 0,
-        @_
-    };
 
     my $obj = {
-        user_id    => $self->user_id(),
-        username   => $self->username(),
-        first_name => $self->first_name(),
-        last_name  => $self->last_name(),
-        email      => $self->email(),
-        type       => $self->type(),
-        is_admin   => $self->is_admin()
+        user_id    => $self->user_id,
+        username   => $self->username,
+        first_name => $self->first_name,
+        last_name  => $self->last_name,
+        email      => $self->email,
+        type       => $self->type,
+        is_admin   => $self->is_admin
     };
 
-    if (!$args->{shallow}) {
+    if (defined $self->workgroups) {
         $obj->{workgroups} = [];
-        foreach my $wg (@{$self->workgroups()}){
-            push @{$obj->{workgroups}}, $wg->to_hash(shallow => 1);
+        foreach my $wg (@{$self->workgroups}){
+            push @{$obj->{workgroups}}, $wg->to_hash;
         }
     }
 
@@ -113,22 +95,14 @@ sub from_hash{
     $self->{type}       = $hash->{type};
     $self->{is_admin}   = $hash->{is_admin};
 
-    $self->{'workgroups'} = [];
-    foreach my $model (@{$hash->{workgroups}}) {
-        push @{$self->{workgroups}}, OESS::Workgroup->new(db => $self->{db}, model => $model);
+    if (defined $hash->{workgroups}) {
+        $self->{workgroups} = [];
+        foreach my $model (@{$hash->{workgroups}}) {
+            push @{$self->{workgroups}}, OESS::Workgroup->new(db => $self->{db}, model => $model);
+        }
     }
 
     return 1;
-}
-
-=head2 _fetch_from_db
-
-=cut
-sub _fetch_from_db{
-    my $self = shift;
-
-
-    return;
 }
 
 =head2 first_name
@@ -169,7 +143,35 @@ sub username{
 =cut
 sub workgroups{
     my $self = shift;
-    return $self->{'workgroups'} || [];
+    my $workgroups = shift;
+
+    if (defined $workgroups) {
+        $self->{workgroups} = $workgroups;
+    }
+    return $self->{workgroups};
+}
+
+=head2 load_workgroups
+
+=cut
+sub load_workgroups {
+    my $self = shift;
+
+    eval {
+        my $workgroups = OESS::DB::User::get_workgroups(
+            db => $self->{db},
+            user_id => $self->{user_id}
+        );
+
+        $self->{workgroups} = [];
+        foreach my $workgroup (@$workgroups) {
+            push @{$self->{workgroups}}, OESS::Workgroup->new(db => $self->{db}, model => $workgroup);
+        }
+    };
+    if ($@) {
+        return "Couldn't load workgroups for user $self->{user_id}: $@";
+    }
+    return;
 }
 
 =head2 email

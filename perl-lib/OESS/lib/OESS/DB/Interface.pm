@@ -129,6 +129,52 @@ sub get_interfaces{
     return \@ints;
 }
 
+=head2 get_interfaces_hash
+
+    my $acl = OESS::DB::Interface::get_interfaces_hash(
+        db => $conn,
+        cloud_interconnect_id => 1, # Optional
+        node_id               => 1, # Optional
+        workgroup_id          => 1  # Optional
+    );
+
+get_interfaces returns a list of all Interfaces from the database
+filtered by the provided arguments.
+
+=cut
+sub get_interfaces_hash{
+    my $args = {
+        db => undef,
+        cloud_interconnect_id => undef,
+        node_id => undef,
+        workgroup_id => undef,
+        @_
+    };
+
+    my $db = $args->{db};
+
+    my $params = [];
+    my $values = [];
+
+    if (defined $args->{node_id}) {
+        push @$params, "node_id=?";
+        push @$values, $args->{node_id};
+    }
+    if (defined $args->{workgroup_id}) {
+        push @$params, "workgroup_id=?";
+        push @$values, $args->{workgroup_id};
+    }
+    if (defined $args->{cloud_interconnect_id}) {
+        push @$params, "cloud_interconnect_id=?";
+        push @$values, $args->{cloud_interconnect_id};
+    }
+
+    my $where = (@$params > 0) ? 'where ' . join(' and ', @$params) : '';
+
+    my $interfaces = $db->execute_query("select * from interface $where", $values);
+    return $interfaces;
+}
+
 =head2 get_acls
 
 =cut

@@ -28,7 +28,20 @@ sub new{
     }
 
     if (defined $self->{db} && defined $self->{workgroup_id}) {
-        $self->_fetch_from_db();
+        eval {
+            $self->{model} = OESS::DB::Workgroup::fetch(
+                db => $self->{db},
+                workgroup_id => $self->{workgroup_id}
+            );
+        };
+        if ($@) {
+            $self->{logger}->error("Couldn't load workgroup: $@");
+        }
+        if (!defined $self->{model}) {
+            $self->{logger}->error("Couldn't find workgroup.");
+            return;
+        }
+
     } elsif (!defined $self->{model}) {
         $self->{logger}->debug('Optional argument `model` is missing.');
         return;
@@ -51,12 +64,21 @@ sub from_hash{
     $self->{'type'} = $hash->{'type'};
     $self->{'max_circuits'} = $hash->{'max_circuits'};
     $self->{'external_id'} = $hash->{'external_id'};
-    $self->{'interfaces'} = ();
 
-    foreach my $int (@{$hash->{'interfaces'}}){
-        push(@{$self->{'interfaces'}}, OESS::Interface->new(interface_id => $int->{'interface_id'}, db => $self->{'db'}));
+    if (defined $hash->{interfaces}) {
+        $self->{interfaces} = [];
+        foreach my $int (@{$hash->{interfaces}}) {
+            push @{$self->{interfaces}}, OESS::Interface->new(db => $self->{db}, model => $int);
+        }
     }
 
+    if (defined $hash->{users}) {
+        $self->{users} = [];
+        foreach my $user (@{$hash->{users}}) {
+            push @{$self->{users}}, OESS::User->new(db => $self->{db}, model => $user);
+        }
+    }
+    return 1;
 }
 
 =head2 to_hash
@@ -64,43 +86,30 @@ sub from_hash{
 =cut
 sub to_hash{
     my $self = shift;
-    my $args = {
-        shallow => 0,
-        @_
-    };
 
     my $obj = {
-        workgroup_id => $self->workgroup_id(),
-        name         => $self->name(),
-        type         => $self->type(),
-        external_id  => $self->external_id(),
-        max_circuits => $self->max_circuits()
+        workgroup_id => $self->workgroup_id,
+        name         => $self->name,
+        type         => $self->type,
+        external_id  => $self->external_id,
+        max_circuits => $self->max_circuits
     };
 
-    if (!$args->{shallow}) {
-        $obj->{'users'} = [];
-        foreach my $user (@{$self->users()}){
-            push(@{$self->{'users'}}, $user->to_hash());
+    if (defined $self->users) {
+        $obj->{users} = [];
+        foreach my $user (@{$self->users}) {
+            push @{$self->{users}}, $user->to_hash;
         }
+    }
 
-        $obj->{'interfaces'} = [];
-        foreach my $int (@{$self->interfaces()}){
-            push(@{$obj->{'interfaces'}}, $int->to_hash());
+    if (defined $self->interfaces) {
+        $obj->{interfaces} = [];
+        foreach my $int (@{$self->interfaces}) {
+            push @{$obj->{interfaces}}, $int->to_hash;
         }
     }
 
     return $obj;
-}
-
-=head2 _fetch_from_db
-
-=cut
-sub _fetch_from_db{
-    my $self = shift;
-
-    my $wg = OESS::DB::Workgroup::fetch(db => $self->{'db'}, workgroup_id => $self->{'workgroup_id'});
-    $self->from_hash($wg);
-    
 }
 
 =head2 max_circuits
@@ -146,7 +155,7 @@ sub name{
 =cut
 sub users{
     my $self = shift;
-    return $self->{'users'} || [];
+    return $self->{'users'};
 }
 
 =head2 interfaces
@@ -154,7 +163,31 @@ sub users{
 =cut
 sub interfaces{
     my $self = shift;
-    return $self->{'interfaces'} || [];
+    return $self->{'interfaces'};
+}
+
+=head2 load_interfaces
+
+=cut
+sub load_interfaces {
+    my $self = shift;
+
+    eval {
+        my $interfaces = OESS::DB::Interface::get_interfaces_hash(
+            db => $self->{db},
+            workgroup_id => $self->{workgroup_id}
+        );
+
+        $self->{interfaces} = [];
+        foreach my $interface (@$interfaces) {
+            warn Dumper($interface);
+            push @{$self->{interfaces}}, OESS::Interface->new(db => $self->{db}, model => $interface);
+        }
+    };
+    if ($@) {
+        return "Couldn't load interfaces for workgroup $self->{workgroup_id}: $@";
+    }
+    return;
 }
 
 =head2 type

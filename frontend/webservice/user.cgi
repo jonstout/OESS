@@ -61,20 +61,15 @@ sub get_current {
     my $method = shift;
     my $params = shift;
 
-    my $user = OESS::DB::User::find_user_by_remote_auth(
-        db          => $db,
-        remote_user => $ENV{'REMOTE_USER'}
-    );
+    my $user = OESS::User->new(db => $db, username => $ENV{REMOTE_USER});
+    $user->load_workgroups;
 
-    my $result = OESS::User->new(db => $db, user_id => $user->{user_id});
-    if (!defined $user) {
-        $method->set_error("Couldn't find user $ENV{'REMOTE_USER'}.");
-        return;
+    foreach my $wg (@{$user->workgroups}) {
+        my $err = $wg->load_interfaces;
+        warn "$err";
     }
 
-    my $hash = $result->to_hash();
-    $hash->{username} = $ENV{REMOTE_USER};
-    return { results => [$hash] };
+    return {results => [ $user->to_hash ]};
 }
 
 sub main{

@@ -29,15 +29,16 @@ sub new{
 
     $self->{'logger'} = $logger;
 
-    if(!defined($self->{'db'})){
-        $self->{'logger'}->error("No Database Object specified");
-        return;
-    }
-    my $ok = $self->_fetch_from_db();
-    if (!$ok) {
-        return;
-    }
+    # if(!defined($self->{'db'})){
+    #     $self->{'logger'}->error("No Database Object specified");
+    #     return;
+    # }
+    # my $ok = $self->_fetch_from_db();
+    # if (!$ok) {
+    #     return;
+    # }
 
+    $self->from_hash($self->{model});
     return $self;
 }
 
@@ -70,17 +71,17 @@ sub to_hash{
     my $self = shift;
 
     my $acl_models = [];
-    foreach my $acl (@{$self->acls()}) {
-        push @$acl_models, $acl->to_hash();
-    }
+    # foreach my $acl (@{$self->acls()}) {
+    #     push @$acl_models, $acl->to_hash();
+    # }
 
     my $res = { name => $self->name(),
                 cloud_interconnect_id => $self->cloud_interconnect_id(),
                 cloud_interconnect_type => $self->cloud_interconnect_type(),
                 description => $self->description(),
                 interface_id => $self->interface_id(),
-                node_id => $self->node()->node_id(),
-                node => $self->node()->name(),
+#                node_id => $self->node()->node_id(),
+#                node => $self->node()->name(),
                 acls => $acl_models,
                 operational_state => $self->{'operational_state'},
                 workgroup_id => $self->workgroup_id() };
