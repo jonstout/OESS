@@ -155,6 +155,7 @@ sub fetch_circuits {
     my $args = {
         db         => undef,
         circuit_id => undef,
+        interface_id => undef,
         state      => undef,
         first      => undef,
         @_
@@ -168,13 +169,31 @@ sub fetch_circuits {
         push @$values, $args->{circuit_id};
     }
     if (defined $args->{workgroup_id}) {
-        push @$params, "(circuit.workgroup_id=? OR interface.workgroup_id=?)";
+        my $subq = "
+            circuit.circuit_id in (
+                select circuit_id
+                from circuit_edge_interface_membership as e
+                join interface as i on i.interface_id=e.interface_id and e.end_epoch=-1
+                where interface.workgroup_id=?
+            )
+        ";
+        push @$params, "(circuit.workgroup_id=? OR $subq)";
         push @$values, $args->{workgroup_id};
         push @$values, $args->{workgroup_id};
     }
     if (defined $args->{state}) {
         push @$params, "circuit.circuit_state=?";
         push @$values, $args->{state};
+    }
+    if (defined $args->{interface_id}) {
+        push @$params, "
+            circuit.circuit_id in (
+                select circuit_id
+                from circuit_edge_interface_membership as e
+                where e.interface_id and e.end_epoch=-1
+            )
+        ";
+        push @$values, $args->{interface_id};
     }
 
     # We hardcode end_epoch to -1 to prevent history from being
@@ -199,8 +218,6 @@ sub fetch_circuits {
                 external_identifier, remote_url, remote_requester
          FROM circuit
          JOIN circuit_instantiation on circuit.circuit_id=circuit_instantiation.circuit_id
-         JOIN circuit_edge_interface_membership on circuit_edge_interface_membership.circuit_id=circuit.circuit_id
-         JOIN interface on interface.interface_id=circuit_edge_interface_membership.interface_id
          $where
          GROUP BY circuit.circuit_id",
         $values

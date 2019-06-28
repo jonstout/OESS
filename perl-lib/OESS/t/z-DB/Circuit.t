@@ -1,5 +1,9 @@
 #!/usr/bin/perl
 
+# fetch_circuits should return a list of all circuits owned by
+# workgroup_id or circuits residing on an interface owned by
+# workgroup_id.
+
 use strict;
 use warnings;
 
