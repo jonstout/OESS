@@ -19,18 +19,22 @@ class PeeringModal {
       this.element.querySelector(`.bgp-asn`).value = null;
       this.element.querySelector(`.bgp-asn`).placeholder = 0;
       this.element.querySelector('.bgp-asn').setAttribute('disabled', true);
+      this.element.querySelector('.bgp-asn').removeAttribute('required');
 
       this.element.querySelector(`.bgp-key`).value = null;
       this.element.querySelector(`.bgp-key`).placeholder = '';
       this.element.querySelector('.bgp-key').setAttribute('disabled', true);
+      this.element.querySelector('.bgp-key').removeAttribute('required');
 
       this.element.querySelector(`.your-peer-ip`).value = null;
       this.element.querySelector(`.your-peer-ip`).placeholder = '192.168.1.2/31';
       this.element.querySelector(`.your-peer-ip`).setAttribute('disabled', true);
+      this.element.querySelector('.your-peer-ip').removeAttribute('required');
 
       this.element.querySelector(`.oess-peer-ip`).value = null;
       this.element.querySelector(`.oess-peer-ip`).placeholder = '192.168.1.3/31';
       this.element.querySelector(`.oess-peer-ip`).setAttribute('disabled', true);
+      this.element.querySelector('.oess-peer-ip').removeAttribute('required');
     }
 
     this.parent = document.querySelector(query);
