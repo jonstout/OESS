@@ -1,6 +1,6 @@
 <configuration><groups><name>OESS</name>
   <interfaces>
-    [% FOREACH interface IN interfaces %]
+    [% FOREACH interface IN endpoints %]
     <interface>
       <name>[% interface.interface %]</name>
       <unit>
@@ -22,7 +22,7 @@
     </interface>
     [% END %]
   </interfaces>
-  [%- FOREACH interface IN interfaces -%]
+  [%- FOREACH interface IN endpoints -%]
   [%- IF interface.bandwidth > 0 %]
   <class-of-service>
     <interfaces>
@@ -75,7 +75,7 @@
     <connections>
       <remote-interface-switch>
         <name>OESS-L2CCC-[% circuit_id %]</name>
-        [% FOREACH interface IN interfaces %]
+        [% FOREACH interface IN endpoints %]
         <interface>[% interface.interface %].[% interface.unit %]</interface>
         [% END %]
         <transmit-lsp>OESS-L2CCC-[% a_side %]-[% path.dest_node %]-LSP-[% circuit_id %]</transmit-lsp>

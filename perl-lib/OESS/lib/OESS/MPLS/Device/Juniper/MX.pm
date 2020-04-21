@@ -830,6 +830,7 @@ sub remove_vlan{
 sub add_vlan_xml {
     my $self = shift;
     my $ckt = shift;
+$self->{logger}->warn(Dumper($ckt));
 
     $ckt->{'switch'}->{'name'} = $self->{'name'};
     $ckt->{'switch'}->{'loopback'} = $self->{'loopback_addr'};

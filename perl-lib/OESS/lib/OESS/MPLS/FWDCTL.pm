@@ -250,8 +250,8 @@ sub _write_cache{
 
     my %switches;
 
+    $self->{'logger'}->info("Writing Layer3 Connections to cache.");
     foreach my $vrf_id (keys (%{$self->{'vrfs'}})){
-        $self->{'logger'}->debug("Writing VRF $vrf_id to cache.");
         my $vrf = $self->get_vrf_object($vrf_id);
         if (!defined $vrf) {
             $self->{'logger'}->error("VRF $vrf_id could't be loaded or written to cache.");
@@ -273,11 +273,11 @@ sub _write_cache{
         }
     }
 
+    $self->{'logger'}->info("Writing Layer2 Connections to cache.");
     foreach my $ckt_id (keys (%{$self->{'circuit'}})){
         my $found = 0;
         next if $self->{'circuit'}->{$ckt_id}->{'type'} ne 'mpls';
 
-        $self->{'logger'}->debug("Writing Circuit $ckt_id to cache.");
         my $ckt = $self->get_ckt_object($ckt_id);
         if (!defined $ckt) {
             $self->{'logger'}->error("Circuit $ckt_id couldn't be loaded or written to cache.");
@@ -297,156 +297,86 @@ sub _write_cache{
                 $ckt_type = "L2CCC";
             }
 
-            if(scalar(@$eps) > 2){
+            if (scalar(@$eps) > 2) {
                 $ckt_type = "L2VPLS";
             }
         }
 
         my $site_id = 0;
-        foreach my $ep_a (@$eps){
-            my @ints;
-            push(@ints, $ep_a->to_hash);
-
+        foreach my $ep_a (@$eps) {
             $site_id++;
-            my $paths = [];
-            my $touch = {};
 
-            if(defined($switches{$ep_a->{'node'}}->{'ckts'}{$details->{'circuit_id'}})){
+            if (!defined $switches{$ep_a->node}) {
+                $switches{$ep_a->node} = { vrfs => {}, ckts => {} };
+            }
+            if (!defined $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}) {
+                $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id} = $ckt->to_hash;
+                $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{endpoints} = [];
+                $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{site_id} = $site_id;
+                $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{ckt_type} = $ckt_type;
+            }
+            push @{$switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{endpoints}}, $ep_a->to_hash;
+
+            $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{circuit_name} = $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{name};
+            $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{a_side} = $ep_a->node_id;
+
+            # Path information is only needed for L2CCC
+            # connections. Skip for all other types.
+            if ($ckt_type ne 'L2CCC') {
                 next;
             }
 
-            foreach my $ep_z (@$eps){
+            # Calculate path from $ep_a to $ep_z.
+            $switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{paths} = [];
 
-                # Ignore interations comparing the same endpoint.
-                next if ($ep_a->{'node'} eq $ep_z->{'node'} && $ep_a->{'interface'} eq $ep_z->{'interface'} && $ep_a->{'tag'} eq $ep_z->{'tag'} && $ep_a->{'inner_tag'} eq $ep_z->{'inner_tag'});
-
-                if ($ep_a->{'node'} eq $ep_z->{'node'}){
-                    # We're comparing interfaces on the same node; There
-                    # are no path calculations to be made.
-                    #
-                    # Because we are only creating a single circuit
-                    # object per node, we should include any other
-                    # interface we see on $ep_a->{'node'}.
-                    push(@ints, $ep_z->to_hash);
-                    next;
-                }
-
-                if (exists $touch->{$ep_z->{'node'}}) {
-                    # A path from $ep_a to $ep_z has already been
-                    # calculated; Skip path calculations.
-                    #
-                    # Because this endpoint is remote to $ep_a we do not
-                    # add the interface to @ints.
-                    next;
-                }
-                $touch->{$ep_z->{'node'}} = 1;
-
+            foreach my $ep_z (@$eps) {
+                # Ignore comparing an endpoint against itself.
+                next if ($ep_a->circuit_ep_id == $ep_z->circuit_ep_id);
 
                 my $primary = $ckt->get_path(path => 'primary');
                 if (!defined $primary) {
-                    push @$paths, {
+                    push @{$switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{paths}}, {
                         name           => 'PRIMARY',
+                        dest           => $self->{node_info}->{$ep_z->node}->{loopback_address},
                         mpls_path_type => 'loose',
-                        dest           => $self->{node_info}->{$ep_z->{node}}->{loopback_address},
-                        dest_node      => $self->{node_info}->{$ep_z->{node}}->{node_id}
+                        dest_node      => $ep_z->node_id
                     };
                 } else {
-                    my $loopback_a = $self->{node_info}->{$ep_a->{node}}->{loopback_address};
-                    my $loopback_z = $self->{node_info}->{$ep_z->{node}}->{loopback_address};
-                    push @$paths, {
+                    my $loopback_a = $self->{node_info}->{$ep_a->node}->{loopback_address};
+                    my $loopback_z = $self->{node_info}->{$ep_z->node}->{loopback_address};
+
+                    push @{$switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{paths}}, {
                         name           => 'PRIMARY',
                         mpls_path_type => 'strict',
                         path           => $primary->hops($loopback_a, $loopback_z),
-                        dest           => $self->{node_info}->{$ep_z->{node}}->{loopback_address},
-                        dest_node      => $self->{node_info}->{$ep_z->{node}}->{node_id}
+                        dest           => $self->{node_info}->{$ep_z->node}->{loopback_address},
+                        dest_node      => $ep_z->node_id
                     };
 
-                    push @$paths, {
+                    push @{$switches{$ep_a->node}->{ckts}->{$ckt->circuit_id}->{paths}}, {
                         name           => 'TERTIARY',
-                        dest           => $self->{node_info}->{$ep_z->{node}}->{loopback_address},
+                        dest           => $self->{node_info}->{$ep_z->node}->{loopback_address},
                         mpls_path_type => 'loose',
-                        dest_node      => $self->{node_info}->{$ep_z->{node}}->{node_id}
+                        dest_node      => $ep_z->node_id
                     };
                 }
-
-                # Because the path hops are specific to the direction
-                # my $primary = $ckt->get_mpls_path_type( path => 'primary');
-
-                # if(!defined($primary) || $primary eq 'none' || $primary eq 'loose'){
-                #     #either we have a none or a loose type for mpls type... or its not defined... in any case... use a loose path
-                #     push(@$paths,{ name => 'PRIMARY',  
-                #                    mpls_path_type => 'loose',
-                #                    dest => $self->{'node_info'}->{$ep_z->{'node'}}->{'loopback_address'},
-                #                    dest_node => $self->{'node_info'}->{$ep_z->{'node'}}->{'node_id'}});
-                # }else{
-                #     #ok so they specified a strict path... get the LSPs
-                #     push(@$paths,{ name => 'PRIMARY', mpls_path_type => 'strict',
-                #                    path => $ckt->get_mpls_hops( path => 'primary',
-                #                                                 start => $ep_a->{'node'},
-                #                                                 end => $ep_z->{'node'}),
-                #                    dest => $self->{'node_info'}->{$ep_z->{'node'}}->{'loopback_address'},
-                #                    dest_node => $self->{'node_info'}->{$ep_z->{'node'}}->{'node_id'}
-                #                });
-
-                #     my $backup = $ckt->get_mpls_path_type( path => 'backup');
-
-                #     if(!defined($backup) || $backup eq 'none' || $backup eq 'loose'){
-                #         push(@$paths,{ name => 'SECONDARY', 
-                #                        mpls_path_type => 'loose',
-                #                        dest => $self->{'node_info'}->{$ep_z->{'node'}}->{'loopback_address'},
-                #                        dest_node => $self->{'node_info'}->{$ep_z->{'node'}}->{'node_id'}});
-                #     }else{
-                #         push(@$paths,{ name => 'SECONDARY',
-                #                        mpls_path_type => 'strict',
-                #                        path => $ckt->get_mpls_hops( path => 'backup',
-                #                                                     start => $ep_a->{'node'},
-                #                                                     end => $ep_z->{'node'}),
-                #                        dest => $self->{'node_info'}->{$ep_z->{'node'}}->{'loopback_address'},
-                #                        dest_node => $self->{'node_info'}->{$ep_z->{'node'}}->{'node_id'}
-                #                    });
-                #         #our tertiary path...
-                #         push(@$paths,{ name => 'TERTIARY',
-                #                        dest => $self->{'node_info'}->{$ep_z->{'node'}}->{'loopback_address'},
-                #                        mpls_path_type => 'loose',
-                #                        dest_node => $self->{'node_info'}->{$ep_z->{'node'}}->{'node_id'}
-                #                    });
-                #     }
-                # }	
             }
-
-            $self->{'logger'}->debug("Adding Circuit: " . $ckt->name() . " to cache for node: " . $ep_a->{'node'});
-
-            if(scalar(@$paths) == 0 && $self->{'config'}->network_type ne 'evpn-vxlan'){
-                # All observed endpoints are on the same node; Use VPLS.
-                $ckt_type = "L2VPLS";
-            }
-
-            my $obj = { circuit_name => $ckt->name(),
-                        interfaces => \@ints,
-                        paths => $paths,
-                        ckt_type => $ckt_type,
-                        site_id => $site_id,
-                        a_side => $ep_a->{'node_id'},
-                        state  => $ckt->state()
-                    };
-
-            $switches{$ep_a->{'node'}}->{'ckts'}{$details->{'circuit_id'}} = $obj;
         }
     }
 
     foreach my $node (keys %{$self->{'node_info'}}){
-	my $data;
-	$data->{'nodes'} = $self->{'node_by_id'};
-	$data->{'ckts'} = $switches{$node}->{'ckts'};
-    $data->{'vrfs'} = $switches{$node}->{'vrfs'};
-	$self->{'logger'}->info("writing shared file for node_id: " . $self->{'node_info'}->{$node}->{'id'});
+        my $data = {
+            nodes => $self->{node_by_id},
+            ckts  => $switches{$node}->{ckts},
+            vrfs  => $switches{$node}->{vrfs}
+        };
+        $self->{'logger'}->info("writing shared file for node_id: " . $self->{'node_info'}->{$node}->{'id'});
 
-	my $file = $self->{'share_file'} . "." . $self->{'node_info'}->{$node}->{'id'};
-	open(my $fh, ">", $file) or $self->{'logger'}->error("Unable to open $file " . $!);
+        my $file = $self->{'share_file'} . "." . $self->{'node_info'}->{$node}->{'id'};
+        open(my $fh, ">", $file) or $self->{'logger'}->error("Unable to open $file " . $!);
         print $fh encode_json($data);
         close($fh);
     }
-
 }
 
 sub _register_rpc_methods{
