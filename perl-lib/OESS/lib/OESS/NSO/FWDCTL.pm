@@ -219,10 +219,7 @@ sub diff {
     my $self = shift;
 
     my ($connections, $err) = $self->{nso}->get_l2connections();
-    if (defined $err) {
-        $self->{logger}->error($err);
-        return;
-    }
+    return $err if defined $err;
 
     # After a connection has been sync'd to NSO we remove it from our hash of
     # nso connections. Any connections left in this hash after syncing are not
@@ -247,20 +244,19 @@ sub diff {
         $network_diff->{$node_obj->name} = "";
     }
 
-    foreach my $node_id (keys %{$self->{cache}}) {
-        foreach my $conn_id (keys %{$self->{cache}->{$node_id}}) {
+    foreach my $node_id (@{$self->{connection_cache}->get_included_nodes}) {
+        foreach my $conn (@{$self->{connection_cache}->get_connections_by_node($node_id, 'l2')}) {
 
             # Skip connections if they're already sync'd.
-            next if defined $syncd_connections->{$conn_id};
-            $syncd_connections->{$conn_id} = 1;
+            next if defined $syncd_connections->{$conn->circuit_id};
+            $syncd_connections->{$conn->circuit_id} = 1;
 
             # Compare cached connection against NSO connection. If no difference
             # continue with next connection, otherwise update NSO to align with
             # cache.
-            my $conn = $self->{cache}->{$node_id}->{$conn_id};
             my $diff_required = 0;
 
-            my $diff = $self->_nso_connection_diff($conn, $nso_l2connections->{$conn_id});
+            my $diff = $conn->nso_diff($nso_l2connections->{$conn->circuit_id});
             foreach my $node (keys %$diff) {
                 next if $diff->{$node} eq "";
 
@@ -269,13 +265,14 @@ sub diff {
             }
 
             push(@$changes, { type => 'edit-l2connection', value => $conn }) if $diff_required;
-            delete $nso_l2connections->{$conn_id};
+            delete $nso_l2connections->{$conn->circuit_id};
         }
     }
 
+    my $empty_conn = new OESS::L2Circuit(db => $self->{db}, model => {});
     foreach my $conn_id (keys %{$nso_l2connections}) {
         # TODO Generate conn removal diff data and add to node diffs
-        my $diff = $self->_nso_connection_diff(undef, $nso_l2connections->{$conn_id});
+        my $diff = $empty_conn->nso_diff($nso_l2connections->{$conn_id});
         foreach my $node (keys %$diff) {
             next if $diff->{$node} eq "";
 
@@ -285,7 +282,6 @@ sub diff {
 
         push @$changes, { type => 'delete-l2connection', value => $nso_l2connections->{$conn_id} };
     }
-    warn 'Network diff:' . Dumper($network_diff);
 
     # If the database asserts there is no diff pending but memory disagrees,
     # then the pending state was modified by an admin. The pending diff may now
@@ -358,6 +354,7 @@ sub diff {
             my $err = $self->{nso}->delete_l2connection($conn->{connection_id});
             if (defined $err) {
                 $self->{logger}->error($err);
+                warn $err;
             }
         }
         else {
@@ -365,8 +362,7 @@ sub diff {
         }
     }
 
-
-    return 1;
+    return;
 }
 
 =head2 get_diff_text
@@ -385,8 +381,7 @@ sub get_diff_text {
 
     my ($connections, $err) = $self->{nso}->get_l2connections();
     if (defined $err) {
-        $self->{logger}->error($err);
-        return;
+        return (undef, $err);
     }
 
     # After a connection has been sync'd to NSO we remove it from our hash of
@@ -427,7 +422,7 @@ sub get_diff_text {
             # cache.
             my $diff_required = 0;
 
-            my $diff = $self->_nso_connection_diff($conn, $nso_l2connections->{$conn->circuit_id});
+            my $diff = $conn->nso_diff($nso_l2connections->{$conn->circuit_id});
             foreach my $node (keys %$diff) {
                 next if $diff->{$node} eq "";
 
@@ -440,8 +435,9 @@ sub get_diff_text {
         }
     }
 
+    my $empty_conn = new OESS::L2Circuit(db => $self->{db}, model => {});
     foreach my $conn_id (keys %{$nso_l2connections}) {
-        my $diff = $self->_nso_connection_diff(undef, $nso_l2connections->{$conn_id});
+        my $diff = $empty_conn->nso_diff($nso_l2connections->{$conn_id});
         foreach my $node (keys %$diff) {
             next if $diff->{$node} eq "";
 
@@ -455,43 +451,41 @@ sub get_diff_text {
     if (defined $args->{node_name}) {
         $node_name = $args->{node_name};
     }
-    warn 'Network diff:' . Dumper($network_diff);
-    warn Dumper($network_diff->{$node_name});
-
-    return $network_diff->{$node_name};
+    return ($network_diff->{$node_name}, undef);
 }
 
 =head2 new_switch
 
 =cut
 sub new_switch {
-    my $self   = shift;
+    my $self = shift;
+    my $args = {
+        node_id => undef,
+        @_
+    };
     my $method = shift;
     my $params = shift;
 
     my $success = $method->{'success_callback'};
     my $error   = $method->{'error_callback'};
 
-    if (defined $self->{nodes}->{$params->{node_id}{value}}) {
-        $self->{logger}->warn("Node $params->{node_id}{value} already registered with FWDCTL.");
-        return &$success({ status => 1 });
+    if (defined $self->{nodes}->{$args->{node_id}}) {
+        $self->{logger}->warn("Node $args->{node_id} already registered with FWDCTL.");
+        return;
     }
 
-    my $node = OESS::DB::Node::fetch(db => $self->{db}, node_id => $params->{node_id}{value});
+    my $node = OESS::DB::Node::fetch(db => $self->{db}, node_id => $args->{node_id});
     if (!defined $node) {
-        my $err = "Couldn't lookup node $params->{node_id}{value}. FWDCTL will not properly provision on this node.";
-        $self->{logger}->error($err);
-        return &$error($err);
+        return "Couldn't lookup node $args->{node_id}. FWDCTL will not properly provision on this node.";
     }
-    $self->{nodes}->{$params->{node_id}{value}} = $node;
+    $self->{nodes}->{$args->{node_id}} = $node;
 
     warn "Switch $node->{name} registered with FWDCTL.";
     $self->{logger}->info("Switch $node->{name} registered with FWDCTL.");
 
     # Make first invocation of polling subroutines
     $self->diff;
-
-    return &$success({ status => 1 });
+    return;
 }
 
 =head2 update_cache
@@ -520,237 +514,6 @@ sub update_cache {
     # TODO lookup and populate l3connections
 
     return;
-}
-
-=head2 _nso_connection_equal_to_cached
-
-_nso_connection_equal_to_cached compares the NSO provided data structure against
-the cached connection object. If there is no difference return 1, otherwise
-return 0.
-
-NSO L2Connection:
-
-    {
-        'connection_id' => 3000,
-        'directly-modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        },
-        'endpoint' => [
-            {
-                'bandwidth' => 0,
-                'endpoint_id' => 1,
-                'interface' => 'GigabitEthernet0/0',
-                'tag' => 1,
-                'device' => 'xr0'
-            },
-            {
-                'bandwidth' => 0,
-                'endpoint_id' => 2,
-                'interface' => 'GigabitEthernet0/1',
-                'tag' => 1,
-                'device' => 'xr0'
-            }
-        ],
-        'device-list' => [
-            'xr0'
-        ],
-        'modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        }
-    }
-
-=cut
-sub _nso_connection_equal_to_cached {
-    my $self = shift;
-    my $conn = shift;
-    my $nsoc = shift; # NSOConnection
-
-    my $conn_ep_count = @{$conn->endpoints};
-    my $nsoc_ep_count = @{$nsoc->{endpoint}};
-    if (@{$conn->endpoints} != @{$nsoc->{endpoint}}) {
-        warn "ep count wrong";
-        return 0;
-    }
-
-    my $ep_index = {};
-    foreach my $ep (@{$conn->endpoints}) {
-        if (!defined $ep_index->{$ep->node}) {
-            $ep_index->{$ep->node} = {};
-        }
-        $ep_index->{$ep->node}->{$ep->interface} = $ep;
-    }
-
-    foreach my $ep (@{$nsoc->{endpoint}}) {
-        if (!defined $ep_index->{$ep->{device}}->{$ep->{interface}}) {
-            warn "ep not in cache";
-            return 0;
-        }
-        my $ref_ep = $ep_index->{$ep->{device}}->{$ep->{interface}};
-
-        warn "band" if $ep->{bandwidth} != $ref_ep->bandwidth;
-        warn "tag" if $ep->{tag} != $ref_ep->tag;
-        warn "inner_tag" if $ep->{inner_tag} != $ref_ep->inner_tag;
-
-        # Compare endpoints
-        return 0 if $ep->{bandwidth} != $ref_ep->bandwidth;
-        return 0 if $ep->{tag} != $ref_ep->tag;
-        return 0 if $ep->{inner_tag} != $ref_ep->inner_tag;
-
-        delete $ep_index->{$ep->{device}}->{$ep->{interface}};
-    }
-
-    foreach my $key (keys %{$ep_index}) {
-        my @leftovers = keys %{$ep_index->{$key}};
-        warn "leftover eps: ".Dumper(@leftovers) if @leftovers > 0;
-        return 0 if @leftovers > 0;
-    }
-
-    return 1;
-}
-
-=head2 _nso_connection_diff
-
-_nso_connection_diff compares the NSO provided data structure against the cached
-connection object. Returns a hash of device-name to textual representation of
-the diff.
-
-If $conn is undef, _nso_connection_diff will generate a diff indicating that all
-endpoints of $nsoc will be removed.
-
-NSO L2Connection:
-
-    {
-        'connection_id' => 3000,
-        'directly-modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        },
-        'endpoint' => [
-            {
-                'bandwidth' => 0,
-                'endpoint_id' => 1,
-                'interface' => 'GigabitEthernet0/0',
-                'tag' => 1,
-                'device' => 'xr0'
-            },
-            {
-                'bandwidth' => 0,
-                'endpoint_id' => 2,
-                'interface' => 'GigabitEthernet0/1',
-                'tag' => 1,
-                'device' => 'xr0'
-            }
-        ],
-        'device-list' => [
-            'xr0'
-        ],
-        'modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        }
-    }
-
-=cut
-sub _nso_connection_diff {
-    my $self = shift;
-    my $conn = shift;
-    my $nsoc = shift; # NSOConnection
-
-    my $diff = {};
-    my $ep_index = {};
-
-    if (!defined $conn) {
-        foreach my $ep (@{$nsoc->{endpoint}}) {
-            $diff->{$ep->{device}} = "" if !defined $diff->{$ep->{device}};
-            $diff->{$ep->{device}} .= "- $ep->{interface}\n";
-            $diff->{$ep->{device}} .= "-   Bandwidth: $ep->{bandwidth}\n";
-            $diff->{$ep->{device}} .= "-   Tag:       $ep->{tag}\n";
-            $diff->{$ep->{device}} .= "-   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
-            next;
-        }
-        return $diff;
-    }
-
-    foreach my $ep (@{$conn->endpoints}) {
-        if (!defined $ep_index->{$ep->node}) {
-            $diff->{$ep->node} = "";
-            $ep_index->{$ep->node} = {};
-        }
-        $ep_index->{$ep->node}->{$ep->interface} = $ep;
-    }
-
-    foreach my $ep (@{$nsoc->{endpoint}}) {
-        if (!defined $ep_index->{$ep->{device}}->{$ep->{interface}}) {
-            $diff->{$ep->{device}} = "" if !defined $diff->{$ep->{device}};
-            $diff->{$ep->{device}} .= "- $ep->{interface}\n";
-            $diff->{$ep->{device}} .= "-   Bandwidth: $ep->{bandwidth}\n";
-            $diff->{$ep->{device}} .= "-   Tag:       $ep->{tag}\n";
-            $diff->{$ep->{device}} .= "-   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
-            next;
-        }
-        my $ref_ep = $ep_index->{$ep->{device}}->{$ep->{interface}};
-
-        # Compare endpoints
-        my $ok = 1;
-        $ok = 0 if $ep->{bandwidth} != $ref_ep->bandwidth;
-        $ok = 0 if $ep->{tag} != $ref_ep->tag;
-        $ok = 0 if $ep->{inner_tag} != $ref_ep->inner_tag;
-        if (!$ok) {
-            $diff->{$ep->{device}} = "" if !defined $diff->{$ep->{device}};
-            $diff->{$ep->{device}} .= "  $ep->{interface}\n";
-        }
-
-        if ($ep->{bandwidth} != $ref_ep->bandwidth) {
-            $diff->{$ep->{device}} .= "-   Bandwidth: $ep->{bandwidth}\n";
-            $diff->{$ep->{device}} .= "+   Bandwidth: $ref_ep->{bandwidth}\n";
-        }
-        if ($ep->{tag} != $ref_ep->tag) {
-            $diff->{$ep->{device}} .= "-   Tag:       $ep->{tag}\n";
-            $diff->{$ep->{device}} .= "+   Tag:       $ref_ep->{tag}\n";
-        }
-        if ($ep->{inner_tag} != $ref_ep->inner_tag) {
-            $diff->{$ep->{device}} .= "-   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
-            $diff->{$ep->{device}} .= "+   Inner Tag: $ref_ep->{inner_tag}\n" if defined $ref_ep->{inner_tag};
-        }
-
-        delete $ep_index->{$ep->{device}}->{$ep->{interface}};
-    }
-
-    foreach my $device_key (keys %{$ep_index}) {
-        foreach my $ep_key (keys %{$ep_index->{$device_key}}) {
-            my $ep = $ep_index->{$device_key}->{$ep_key};
-            $diff->{$ep->node} = "" if !defined $diff->{$ep->node};
-
-            $diff->{$ep->node} .= "+ $ep->{interface}\n";
-            $diff->{$ep->node} .= "+   Bandwidth: $ep->{bandwidth}\n";
-            $diff->{$ep->node} .= "+   Tag:       $ep->{tag}\n";
-            $diff->{$ep->node} .= "+   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
-        }
-    }
-
-    return $diff;
 }
 
 1;

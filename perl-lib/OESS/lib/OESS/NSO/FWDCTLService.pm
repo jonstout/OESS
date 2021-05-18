@@ -25,10 +25,6 @@ use constant FWDCTL_FAILURE     => 0;
 use constant FWDCTL_UNKNOWN     => 3;
 use constant FWDCTL_BLOCKED     => 4;
 
-use constant PENDING_DIFF_NONE  => 0;
-use constant PENDING_DIFF       => 1;
-use constant PENDING_DIFF_ERROR => 2;
-use constant PENDING_DIFF_APPROVED => 3;
 
 =head1 OESS::NSO::FWDCTLService
 
@@ -50,12 +46,7 @@ sub new {
     if (!defined $self->{config_obj}) {
         $self->{config_obj} = new OESS::Config(config_filename => $self->{config_filename});
     }
-    $self->{cache} = {};
-    $self->{l3_cache} = {};
-    $self->{flat_cache} = {};
-    $self->{l3_flat_cache} = {};
 
-    $self->{pending_diff} = {};
     $self->{db} = new OESS::DB(config => $self->{config_obj}->filename);
     $self->{nodes} = {};
     $self->{nso} = new OESS::NSO::Client(config => $self->{config_obj});
@@ -95,7 +86,11 @@ sub start {
         $self->{nodes}->{$node->{node_id}} = $node;
     }
 
-    $self->_update_cache;
+    my $err = $self->{fwdctl}->update_cache;
+    if (defined $err) {
+        warn $err;
+        $self->{logger}->error($err);
+    }
 
     # Setup polling subroutines
     $self->{connection_timer} = AnyEvent->timer(
@@ -430,154 +425,11 @@ into a pending state. Diff states are tracked on a per-node basis.
 sub diff {
     my $self = shift;
 
-    my ($connections, $err) = $self->{nso}->get_l2connections();
+    my $err = $self->{fwdctl}->diff;
     if (defined $err) {
         $self->{logger}->error($err);
         return;
     }
-
-    # After a connection has been sync'd to NSO we remove it from our hash of
-    # nso connections. Any connections left in this hash after syncing are not
-    # known by OESS and should be removed.
-    my $nso_l2connections = {};
-    foreach my $conn (@{$connections}) {
-        $nso_l2connections->{$conn->{connection_id}} = $conn;
-    }
-
-    my $network_diff = {};
-    my $changes = [];
-
-    # Connections are stored in-memory multiple times under each node they're
-    # associed with. Keep a record of connections as they're sync'd to prevent a
-    # connection from being sync'd more than once.
-    my $syncd_connections = {};
-
-    # Needed to ensure diff state may be set to pending_diff_none after approval
-    foreach my $node_id (keys %{$self->{cache}}) {
-        # TODO Cleanup this hacky lookup
-        my $node_obj = new OESS::Node(db => $self->{db}, node_id => $node_id);
-        $network_diff->{$node_obj->name} = "";
-    }
-
-    foreach my $node_id (keys %{$self->{cache}}) {
-        foreach my $conn_id (keys %{$self->{cache}->{$node_id}}) {
-
-            # Skip connections if they're already sync'd.
-            next if defined $syncd_connections->{$conn_id};
-            $syncd_connections->{$conn_id} = 1;
-
-            # Compare cached connection against NSO connection. If no difference
-            # continue with next connection, otherwise update NSO to align with
-            # cache.
-            my $conn = $self->{cache}->{$node_id}->{$conn_id};
-            my $diff_required = 0;
-
-            my $diff = $self->_nso_connection_diff($conn, $nso_l2connections->{$conn_id});
-            foreach my $node (keys %$diff) {
-                next if $diff->{$node} eq "";
-
-                $diff_required = 1;
-                $network_diff->{$node} .= $diff->{$node};
-            }
-
-            push(@$changes, { type => 'edit-l2connection', value => $conn }) if $diff_required;
-            delete $nso_l2connections->{$conn_id};
-        }
-    }
-
-    foreach my $conn_id (keys %{$nso_l2connections}) {
-        # TODO Generate conn removal diff data and add to node diffs
-        my $diff = $self->_nso_connection_diff(undef, $nso_l2connections->{$conn_id});
-        foreach my $node (keys %$diff) {
-            next if $diff->{$node} eq "";
-
-            $diff_required = 1;
-            $network_diff->{$node} .= $diff->{$node};
-        }
-
-        push @$changes, { type => 'delete-l2connection', value => $nso_l2connections->{$conn_id} };
-    }
-    warn 'Network diff:' . Dumper($network_diff);
-
-    # If the database asserts there is no diff pending but memory disagrees,
-    # then the pending state was modified by an admin. The pending diff may now
-    # proceed.
-    foreach my $node_name (keys %$network_diff) {
-        my $node = new OESS::Node(db => $self->{db}, name => $node_name);
-        warn "Diffing $node_name.";
-
-        if (length $network_diff->{$node_name} < 30) {
-            warn "Diff approved for $node_name";
-
-            $self->{pending_diff}->{$node_name} = PENDING_DIFF_NONE;
-            $node->pending_diff(PENDING_DIFF_NONE);
-            $node->update;
-        } else {
-            if ($self->{pending_diff}->{$node_name} == PENDING_DIFF_NONE) {
-                warn "Diff requires manual approval.";
-
-                $self->{pending_diff}->{$node_name} = PENDING_DIFF;
-                $node->pending_diff(PENDING_DIFF);
-                $node->update;
-            }
-
-            if ($self->{pending_diff}->{$node_name} == PENDING_DIFF && $node->pending_diff == PENDING_DIFF_NONE) {
-                warn "Diff manually approved.";
-                $self->{pending_diff}->{$node_name} = PENDING_DIFF_APPROVED;
-            }
-        }
-    }
-
-    foreach my $change (@$changes) {
-        if ($change->{type} eq 'edit-l2connection') {
-            my $conn = $change->{value};
-
-            # If conn endpoint on node with a blocked diff skip
-            my $diff_approval_required = 0;
-            foreach my $ep (@{$conn->endpoints}) {
-                if ($self->{pending_diff}->{$ep->node} == PENDING_DIFF) {
-                    $diff_approval_required =  1;
-                    last;
-                }
-            }
-            if ($diff_approval_required) {
-                warn "Not syncing l2connection $change->{value}.";
-                next;
-            }
-
-            my $err = $self->{nso}->edit_l2connection($conn);
-            if (defined $err) {
-                $self->{logger}->error($err);
-                warn $err;
-            }
-        }
-        elsif ($change->{type} eq 'delete-l2connection') {
-            my $conn = $change->{value};
-
-            # If conn endpoint on node with a blocked diff skip
-            my $diff_approval_required = 0;
-            foreach my $ep (@{$conn->{endpoint}}) {
-                if ($self->{pending_diff}->{$ep->{device}} == PENDING_DIFF) {
-                    $diff_approval_required =  1;
-                    last;
-                }
-            }
-            if ($diff_approval_required) {
-                warn "Not syncing l2connection $conn->{connection_id}.";
-                next;
-            }
-
-            my $err = $self->{nso}->delete_l2connection($conn->{connection_id});
-            if (defined $err) {
-                $self->{logger}->error($err);
-            }
-        }
-        else {
-            warn 'no idea what happened here';
-        }
-    }
-
-
     return 1;
 }
 
@@ -595,79 +447,12 @@ sub get_diff_text {
     my $node_id = $params->{node_id}{value};
     my $node_name = "";
 
-    my ($connections, $err) = $self->{nso}->get_l2connections();
+    my ($diff, $err) = $self->{fwdctl}->get_diff_text(node_id => $node_id);
     if (defined $err) {
         $self->{logger}->error($err);
-        return;
+        return &$error($err);
     }
-
-    # After a connection has been sync'd to NSO we remove it from our hash of
-    # nso connections. Any connections left in this hash after syncing are not
-    # known by OESS and should be removed.
-    my $nso_l2connections = {};
-    foreach my $conn (@{$connections}) {
-        $nso_l2connections->{$conn->{connection_id}} = $conn;
-    }
-
-    my $network_diff = {};
-    my $changes = [];
-
-    # Connections are stored in-memory multiple times under each node they're
-    # associed with. Keep a record of connections as they're sync'd to prevent a
-    # connection from being sync'd more than once.
-    my $syncd_connections = {};
-
-    # Needed to ensure diff state may be set to pending_diff_none after approval
-    foreach my $key (keys %{$self->{cache}}) {
-        # TODO Cleanup this hacky lookup
-        my $node_obj = new OESS::Node(db => $self->{db}, node_id => $key);
-        $network_diff->{$node_obj->name} = "";
-        if ($key == $node_id) {
-            $node_name = $node_obj->name;
-        }
-    }
-
-    foreach my $node_id (keys %{$self->{cache}}) {
-        foreach my $conn_id (keys %{$self->{cache}->{$node_id}}) {
-
-            # Skip connections if they're already sync'd.
-            next if defined $syncd_connections->{$conn_id};
-            $syncd_connections->{$conn_id} = 1;
-
-            # Compare cached connection against NSO connection. If no difference
-            # continue with next connection, otherwise update NSO to align with
-            # cache.
-            my $conn = $self->{cache}->{$node_id}->{$conn_id};
-            my $diff_required = 0;
-
-            my $diff = $self->_nso_connection_diff($conn, $nso_l2connections->{$conn_id});
-            foreach my $node (keys %$diff) {
-                next if $diff->{$node} eq "";
-
-                $diff_required = 1;
-                $network_diff->{$node} .= $diff->{$node};
-            }
-
-            push(@$changes, { type => 'edit-l2connection', value => $conn_id }) if $diff_required;
-            delete $nso_l2connections->{$conn_id};
-        }
-    }
-
-    foreach my $conn_id (keys %{$nso_l2connections}) {
-        my $diff = $self->_nso_connection_diff(undef, $nso_l2connections->{$conn_id});
-        foreach my $node (keys %$diff) {
-            next if $diff->{$node} eq "";
-
-            $diff_required = 1;
-            $network_diff->{$node} .= $diff->{$node};
-        }
-
-        push @$changes, { type => 'delete-l2connection', value => $conn_id };
-    }
-    warn 'Network diff:' . Dumper($network_diff);
-    warn Dumper($network_diff->{$node_name});
-
-    return &$success($network_diff->{$node_name});
+    return &$success($diff);
 }
 
 =head2 new_switch
@@ -681,31 +466,18 @@ sub new_switch {
     my $success = $method->{'success_callback'};
     my $error   = $method->{'error_callback'};
 
-    if (defined $self->{nodes}->{$params->{node_id}{value}}) {
-        $self->{logger}->warn("Node $params->{node_id}{value} already registered with FWDCTL.");
-        return &$success({ status => 1 });
-    }
-
-    my $node = OESS::DB::Node::fetch(db => $self->{db}, node_id => $params->{node_id}{value});
-    if (!defined $node) {
-        my $err = "Couldn't lookup node $params->{node_id}{value}. FWDCTL will not properly provision on this node.";
+    my $err = $self->{fwdctl}->new_switch(node_id => $params->{node_id}{value});
+    if (defined $err) {
         $self->{logger}->error($err);
         return &$error($err);
     }
-    $self->{nodes}->{$params->{node_id}{value}} = $node;
-
-    warn "Switch $node->{name} registered with FWDCTL.";
-    $self->{logger}->info("Switch $node->{name} registered with FWDCTL.");
-
-    # Make first invocation of polling subroutines
-    $self->diff;
-
     return &$success({ status => 1 });
 }
 
 =head2 update_cache
 
-update_cache is a rabbitmq proxy method to _update_cache.
+update_cache reads all connections from the database and loads them
+into an in-memory cache.
 
 =cut
 sub update_cache {
@@ -716,345 +488,12 @@ sub update_cache {
     my $success = $method->{success_callback};
     my $error = $method->{error_callback};
 
-    my $err = $self->_update_cache;
+    my $err = $self->{fwdctl}->update_cache;
     if (defined $err) {
         $self->{logger}->error($err);
         return &$error($err);
     }
     return &$success({ status => 1 });
-}
-
-=head2 _update_cache
-
-_update_cache reads all connections from the database and loads them into an
-in-memory cache.
-
-In memory connection cache:
-{
-    "node-id-1": {
-        "conn-id-1": { "eps" : [ "node-id-1", "node-id-2" ] }
-    },
-    "node-id-2": {
-        "conn-id-1": { "eps" : [ "node-id-1", "node-id-2" ] }
-    }
-}
-
-This implies that a connection is stored under each node. This allows us to
-query all connections associated with a single node. Additionally this helps us
-track large changes that may effect multiple connections on a single node.
-
-=cut
-sub _update_cache {
-    my $self = shift;
-
-    my $l2connections = OESS::DB::Circuit::fetch_circuits(
-        db => $self->{db}
-    );
-    if (!defined $l2connections) {
-        return "Couldn't load l2connections in update_cache.";
-    }
-
-    foreach my $conn (@$l2connections) {
-        my $conn_obj = new OESS::L2Circuit(db => $self->{db}, model => $conn);
-        $conn_obj->load_endpoints;
-        $self->_add_connection_to_cache($conn_obj, 'l2');
-    }
-
-    return;
-}
-
-=head2 _del_connection_from_cache
-
-_del_connection_in_cache is a simple helper to correctly remove a connection
-object from memory.
-
-=cut
-sub _del_connection_from_cache {
-    my $self = shift;
-    my $conn = shift;
-    my $type = shift;
-
-    my $cache = 'cache';
-    my $flat_cache = 'flat_cache';
-    if ($type eq 'l3') {
-        $cache = 'l3_cache';
-        $flat_cache = 'l3_flat_cache';
-    }
-
-    foreach my $ep (@{$conn->endpoints}) {
-        if (!defined $self->{$cache}->{$ep->node_id}) {
-            next;
-        }
-        delete $self->{$cache}->{$ep->node_id}->{$conn->circuit_id};
-    }
-    delete $self->{$flat_cache}->{$conn->circuit_id};
-
-    return 1;
-}
-
-=head2 _add_connection_to_cache
-
-_add_connection_to_cache is a simple helper to correctly place a connection
-object into memory.
-
-=cut
-sub _add_connection_to_cache {
-    my $self = shift;
-    my $conn = shift;
-    my $type = shift;
-
-    my $cache = 'cache';
-    my $flat_cache = 'flat_cache';
-    if ($type eq 'l3') {
-        $cache = 'l3_cache';
-        $flat_cache = 'l3_flat_cache';
-    }
-
-    foreach my $ep (@{$conn->endpoints}) {
-        if (!defined $self->{$cache}->{$ep->node_id}) {
-            $self->{$cache}->{$ep->node_id} = {};
-        }
-        $self->{$cache}->{$ep->node_id}->{$conn->circuit_id} = $conn;
-    }
-
-    $self->{$flat_cache}->{$conn->circuit_id} = $conn;
-
-    return 1;
-}
-
-=head2 _nso_connection_equal_to_cached
-
-_nso_connection_equal_to_cached compares the NSO provided data structure against
-the cached connection object. If there is no difference return 1, otherwise
-return 0.
-
-NSO L2Connection:
-
-    {
-        'connection_id' => 3000,
-        'directly-modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        },
-        'endpoint' => [
-            {
-                'bandwidth' => 0,
-                'endpoint_id' => 1,
-                'interface' => 'GigabitEthernet0/0',
-                'tag' => 1,
-                'device' => 'xr0'
-            },
-            {
-                'bandwidth' => 0,
-                'endpoint_id' => 2,
-                'interface' => 'GigabitEthernet0/1',
-                'tag' => 1,
-                'device' => 'xr0'
-            }
-        ],
-        'device-list' => [
-            'xr0'
-        ],
-        'modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        }
-    }
-
-=cut
-sub _nso_connection_equal_to_cached {
-    my $self = shift;
-    my $conn = shift;
-    my $nsoc = shift; # NSOConnection
-
-    my $conn_ep_count = @{$conn->endpoints};
-    my $nsoc_ep_count = @{$nsoc->{endpoint}};
-    if (@{$conn->endpoints} != @{$nsoc->{endpoint}}) {
-        warn "ep count wrong";
-        return 0;
-    }
-
-    my $ep_index = {};
-    foreach my $ep (@{$conn->endpoints}) {
-        if (!defined $ep_index->{$ep->node}) {
-            $ep_index->{$ep->node} = {};
-        }
-        $ep_index->{$ep->node}->{$ep->interface} = $ep;
-    }
-
-    foreach my $ep (@{$nsoc->{endpoint}}) {
-        if (!defined $ep_index->{$ep->{device}}->{$ep->{interface}}) {
-            warn "ep not in cache";
-            return 0;
-        }
-        my $ref_ep = $ep_index->{$ep->{device}}->{$ep->{interface}};
-
-        warn "band" if $ep->{bandwidth} != $ref_ep->bandwidth;
-        warn "tag" if $ep->{tag} != $ref_ep->tag;
-        warn "inner_tag" if $ep->{inner_tag} != $ref_ep->inner_tag;
-
-        # Compare endpoints
-        return 0 if $ep->{bandwidth} != $ref_ep->bandwidth;
-        return 0 if $ep->{tag} != $ref_ep->tag;
-        return 0 if $ep->{inner_tag} != $ref_ep->inner_tag;
-
-        delete $ep_index->{$ep->{device}}->{$ep->{interface}};
-    }
-
-    foreach my $key (keys %{$ep_index}) {
-        my @leftovers = keys %{$ep_index->{$key}};
-        warn "leftover eps: ".Dumper(@leftovers) if @leftovers > 0;
-        return 0 if @leftovers > 0;
-    }
-
-    return 1;
-}
-
-
-
-
-
-=head2 _nso_connection_diff
-
-_nso_connection_diff compares the NSO provided data structure against the cached
-connection object. Returns a hash of device-name to textual representation of
-the diff.
-
-If $conn is undef, _nso_connection_diff will generate a diff indicating that all
-endpoints of $nsoc will be removed.
-
-NSO L2Connection:
-
-    {
-        'connection_id' => 3000,
-        'directly-modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        },
-        'endpoint' => [
-            {
-                'bandwidth' => 0,
-                'endpoint_id' => 1,
-                'interface' => 'GigabitEthernet0/0',
-                'tag' => 1,
-                'device' => 'xr0'
-            },
-            {
-                'bandwidth' => 0,
-                'endpoint_id' => 2,
-                'interface' => 'GigabitEthernet0/1',
-                'tag' => 1,
-                'device' => 'xr0'
-            }
-        ],
-        'device-list' => [
-            'xr0'
-        ],
-        'modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        }
-    }
-
-=cut
-sub _nso_connection_diff {
-    my $self = shift;
-    my $conn = shift;
-    my $nsoc = shift; # NSOConnection
-
-    my $diff = {};
-    my $ep_index = {};
-
-    if (!defined $conn) {
-        foreach my $ep (@{$nsoc->{endpoint}}) {
-            $diff->{$ep->{device}} = "" if !defined $diff->{$ep->{device}};
-            $diff->{$ep->{device}} .= "- $ep->{interface}\n";
-            $diff->{$ep->{device}} .= "-   Bandwidth: $ep->{bandwidth}\n";
-            $diff->{$ep->{device}} .= "-   Tag:       $ep->{tag}\n";
-            $diff->{$ep->{device}} .= "-   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
-            next;
-        }
-        return $diff;
-    }
-
-    foreach my $ep (@{$conn->endpoints}) {
-        if (!defined $ep_index->{$ep->node}) {
-            $diff->{$ep->node} = "";
-            $ep_index->{$ep->node} = {};
-        }
-        $ep_index->{$ep->node}->{$ep->interface} = $ep;
-    }
-
-    foreach my $ep (@{$nsoc->{endpoint}}) {
-        if (!defined $ep_index->{$ep->{device}}->{$ep->{interface}}) {
-            $diff->{$ep->{device}} = "" if !defined $diff->{$ep->{device}};
-            $diff->{$ep->{device}} .= "- $ep->{interface}\n";
-            $diff->{$ep->{device}} .= "-   Bandwidth: $ep->{bandwidth}\n";
-            $diff->{$ep->{device}} .= "-   Tag:       $ep->{tag}\n";
-            $diff->{$ep->{device}} .= "-   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
-            next;
-        }
-        my $ref_ep = $ep_index->{$ep->{device}}->{$ep->{interface}};
-
-        # Compare endpoints
-        my $ok = 1;
-        $ok = 0 if $ep->{bandwidth} != $ref_ep->bandwidth;
-        $ok = 0 if $ep->{tag} != $ref_ep->tag;
-        $ok = 0 if $ep->{inner_tag} != $ref_ep->inner_tag;
-        if (!$ok) {
-            $diff->{$ep->{device}} = "" if !defined $diff->{$ep->{device}};
-            $diff->{$ep->{device}} .= "  $ep->{interface}\n";
-        }
-
-        if ($ep->{bandwidth} != $ref_ep->bandwidth) {
-            $diff->{$ep->{device}} .= "-   Bandwidth: $ep->{bandwidth}\n";
-            $diff->{$ep->{device}} .= "+   Bandwidth: $ref_ep->{bandwidth}\n";
-        }
-        if ($ep->{tag} != $ref_ep->tag) {
-            $diff->{$ep->{device}} .= "-   Tag:       $ep->{tag}\n";
-            $diff->{$ep->{device}} .= "+   Tag:       $ref_ep->{tag}\n";
-        }
-        if ($ep->{inner_tag} != $ref_ep->inner_tag) {
-            $diff->{$ep->{device}} .= "-   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
-            $diff->{$ep->{device}} .= "+   Inner Tag: $ref_ep->{inner_tag}\n" if defined $ref_ep->{inner_tag};
-        }
-
-        delete $ep_index->{$ep->{device}}->{$ep->{interface}};
-    }
-
-    foreach my $device_key (keys %{$ep_index}) {
-        foreach my $ep_key (keys %{$ep_index->{$device_key}}) {
-            my $ep = $ep_index->{$device_key}->{$ep_key};
-            $diff->{$ep->node} = "" if !defined $diff->{$ep->node};
-
-            $diff->{$ep->node} .= "+ $ep->{interface}\n";
-            $diff->{$ep->node} .= "+   Bandwidth: $ep->{bandwidth}\n";
-            $diff->{$ep->node} .= "+   Tag:       $ep->{tag}\n";
-            $diff->{$ep->node} .= "+   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
-        }
-    }
-
-    return $diff;
 }
 
 1;

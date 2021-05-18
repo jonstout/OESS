@@ -63,13 +63,13 @@ my $expect1 = {
 my $err1 = $fwdctl->addVlan(circuit_id => 4081);
 ok(!defined $err1, 'Vlan created');
 
-my $text1 = $fwdctl->get_diff_text(node_id => 11);
+my ($text1, $err1) = $fwdctl->get_diff_text(node_id => 11);
 ok($text1 eq $expect1->{'Node 11'}, 'Got expected diff');
 
-my $text2 = $fwdctl->get_diff_text(node_id => 31);
+my ($text2, $err2) = $fwdctl->get_diff_text(node_id => 31);
 ok($text2 eq $expect1->{'Node 31'}, 'Got expected diff');
 
-my $text3 = $fwdctl->get_diff_text(node_name => 'xr0');
+my ($text3, $err3) = $fwdctl->get_diff_text(node_name => 'xr0');
 ok($text3 eq $expect1->{'xr0'}, 'Got expected diff');
 
 
@@ -92,5 +92,5 @@ my $expect2 = {
 '
 };
 
-my $text4 = $fwdctl2->get_diff_text(node_name => 'xr0');
+my ($text4, $err4) = $fwdctl2->get_diff_text(node_name => 'xr0');
 ok($text4 eq $expect2->{'xr0'}, 'Got expected diff');

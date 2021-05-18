@@ -1200,6 +1200,49 @@ Given an NSO Connection object: Return a hash of device-name to
 human-readable-diff containing the difference between this L2Circuit
 and the provided NSO Connection object.
 
+NSO L2Connection:
+
+    {
+        'connection_id' => 3000,
+        'directly-modified' => {
+            'services' => [
+                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']',
+                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']'
+            ],
+            'devices' => [
+                'xr0'
+            ]
+        },
+        'endpoint' => [
+            {
+                'bandwidth' => 0,
+                'endpoint_id' => 1,
+                'interface' => 'GigabitEthernet0/0',
+                'tag' => 1,
+                'device' => 'xr0'
+            },
+            {
+                'bandwidth' => 0,
+                'endpoint_id' => 2,
+                'interface' => 'GigabitEthernet0/1',
+                'tag' => 1,
+                'device' => 'xr0'
+            }
+        ],
+        'device-list' => [
+            'xr0'
+        ],
+        'modified' => {
+            'services' => [
+                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']',
+                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']'
+            ],
+            'devices' => [
+                'xr0'
+            ]
+        }
+    }
+
 =cut
 sub nso_diff {
     my $self = shift;
