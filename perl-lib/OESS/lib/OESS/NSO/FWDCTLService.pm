@@ -1,4 +1,4 @@
-package OESS::NSO::FWDCTL;
+package OESS::NSO::FWDCTLService;
 
 use AnyEvent;
 use Data::Dumper;
@@ -30,7 +30,7 @@ use constant PENDING_DIFF       => 1;
 use constant PENDING_DIFF_ERROR => 2;
 use constant PENDING_DIFF_APPROVED => 3;
 
-=head1 OESS::NSO::FWDCTL
+=head1 OESS::NSO::FWDCTLService
 
 =cut
 
@@ -40,9 +40,8 @@ use constant PENDING_DIFF_APPROVED => 3;
 sub new {
     my $class = shift;
     my $args  = {
-        connection_cache => undef, # OESS::NSO::ConnectionCache
-        db    => undef, # OESS::DB
-        nso   => undef, # OESS::NSO::Client or OESS::NSO::ClientStub
+        config_obj      => undef,
+        config_filename => '/etc/oess/database.xml',
         logger          => Log::Log4perl->get_logger('OESS.NSO.FWDCTL'),
         @_
     };
@@ -51,14 +50,22 @@ sub new {
     if (!defined $self->{config_obj}) {
         $self->{config_obj} = new OESS::Config(config_filename => $self->{config_filename});
     }
-
     $self->{cache} = {};
     $self->{l3_cache} = {};
     $self->{flat_cache} = {};
     $self->{l3_flat_cache} = {};
 
     $self->{pending_diff} = {};
+    $self->{db} = new OESS::DB(config => $self->{config_obj}->filename);
     $self->{nodes} = {};
+    $self->{nso} = new OESS::NSO::Client(config => $self->{config_obj});
+
+    my $cache = new OESS::NSO::ConnectionCache();
+    $self->{fwdctl} = new OESS::NSO::FWDCTL(
+        connection_cache => $cache,
+        db               => $self->{db},
+        nso              => $self->{nso}
+    );
 
     # When this process receives sigterm send an event to notify all
     # children to exit cleanly.
@@ -69,27 +76,240 @@ sub new {
     return $self;
 }
 
+=head2 start
+
+start configures polling timers, loads in-memory cache of l2 and l3
+connections, and sets up a rabbitmq dispatcher for RCP calls into FWDCTL.
+
+=cut
+sub start {
+    my $self = shift;
+
+    # Load devices from database
+    my $nodes = OESS::DB::Node::fetch_all(db => $self->{db}, controller => 'nso');
+    if (!defined $nodes) {
+        warn "Couldn't lookup nodes. FWDCTL will not provision on any existing nodes.";
+        $self->{logger}->error("Couldn't lookup nodes. Discovery will not provision on any existing nodes.");
+    }
+    foreach my $node (@$nodes) {
+        $self->{nodes}->{$node->{node_id}} = $node;
+    }
+
+    $self->_update_cache;
+
+    # Setup polling subroutines
+    $self->{connection_timer} = AnyEvent->timer(
+        after    => 5,
+        interval => 30,
+        cb       => sub { $self->diff(@_); }
+    );
+
+    $self->{dispatcher} = new OESS::RabbitMQ::Dispatcher(
+        queue => 'NSO-FWDCTL',
+        topic => 'NSO.FWDCTL.RPC'
+    );
+
+    my $add_vlan = GRNOC::RabbitMQ::Method->new(
+        name => "addVlan",
+        async => 1,
+        callback => sub { $self->addVlan(@_) },
+        description => "addVlan provisions a l2 connection"
+    );
+    $add_vlan->add_input_parameter(
+        name => "circuit_id",
+        description => "Id of the l2 connection to add",
+        required => 1,
+        attern => $GRNOC::WebService::Regex::INTEGER
+    );
+    $self->{dispatcher}->register_method($add_vlan);
+
+    my $delete_vlan = GRNOC::RabbitMQ::Method->new(
+        name => "deleteVlan",
+        async => 1,
+        callback => sub { $self->deleteVlan(@_) },
+        description => "deleteVlan removes a l2 connection"
+    );
+    $delete_vlan->add_input_parameter(
+        name => "circuit_id",
+        description => "Id of the l2 connection to delete",
+        required => 1,
+        pattern => $GRNOC::WebService::Regex::INTEGER
+    );
+    $self->{dispatcher}->register_method($delete_vlan);
+
+    my $modify_vlan = GRNOC::RabbitMQ::Method->new(
+        name => "modifyVlan",
+        async => 1,
+        callback => sub { $self->modifyVlan(@_) },
+        description => "modifyVlan modifies an existing l2 connection"
+    );
+    $modify_vlan->add_input_parameter(
+        name => "circuit_id",
+        description => "Id of l2 connection to be modified.",
+        required => 1,
+        pattern => $GRNOC::WebService::Regex::INTEGER
+    );
+    $modify_vlan->add_input_parameter(
+        name => "previous",
+        description => "Previous version of the modified l2 connection.",
+        required => 1,
+        pattern => $GRNOC::WebService::Regex::TEXT
+    );
+    $modify_vlan->add_input_parameter(
+        name => "pending",
+        description => "Pending version of the modified l2 connection.",
+        required => 1,
+        pattern => $GRNOC::WebService::Regex::TEXT
+    );
+    $self->{dispatcher}->register_method($modify_vlan);
+
+    my $add_vrf = GRNOC::RabbitMQ::Method->new(
+        name => "addVrf",
+        async => 1,
+        callback => sub { $self->addVrf(@_) },
+        description => "addVrf provisions a l3 connection"
+    );
+    $self->{dispatcher}->register_method($add_vrf);
+
+    my $delete_vrf = GRNOC::RabbitMQ::Method->new(
+        name => "delVrf",
+        async => 1,
+        callback => sub { $self->deleteVrf(@_) },
+        description => "delVrf removes a l3 connection"
+    );
+    $self->{dispatcher}->register_method($delete_vrf);
+
+    my $modify_vrf = GRNOC::RabbitMQ::Method->new(
+        name => "modifyVrf",
+        async => 1,
+        callback => sub { $self->modifyVrf(@_) },
+        description => "modifyVrf modifies an existing l3 connection"
+    );
+    $self->{dispatcher}->register_method($modify_vrf);
+
+    # NOTE It's not expected that any children processes will exist in this
+    # version of FWDCTL. Result is hardcoded.
+    my $check_child_status = GRNOC::RabbitMQ::Method->new(
+        name        => "check_child_status",
+        description => "check_child_status returns an event id which will return the final status of all children",
+        callback    => sub {
+            my $method = shift;
+            return { status => 1, event_id => 1 };
+        }
+    );
+    $self->{dispatcher}->register_method($check_child_status);
+
+    # NOTE It's not expected that any children processes will exist in this
+    # version of FWDCTL. Result is hardcoded.
+    my $get_event_status = GRNOC::RabbitMQ::Method->new(
+        name        => "get_event_status",
+        description => "get_event_status returns the current status of the event",
+        callback    => sub {
+            my $method = shift;
+            return { status => 1 };
+        }
+    );
+    $get_event_status->add_input_parameter(
+        name => "event_id",
+        description => "the event id to fetch the current state of",
+        required => 1,
+        pattern => $GRNOC::WebService::Regex::NAME_ID
+    );
+    $self->{dispatcher}->register_method($get_event_status);
+
+    # TODO It's not clear if both is_online and echo are required; Please
+    # investigate.
+    my $echo = GRNOC::RabbitMQ::Method->new(
+        name        => "echo",
+        description => "echo always returns 1",
+        callback    => sub {
+            my $method = shift;
+            return { status => 1 };
+        }
+    );
+    $self->{dispatcher}->register_method($echo);
+
+    my $get_diff_text = GRNOC::RabbitMQ::Method->new(
+        name => 'get_diff_text',
+        async => 1,
+        callback => sub { $self->get_diff_text(@_); },
+        description => "Returns a human readable diff for node_id"
+    );
+    $get_diff_text->add_input_parameter(
+        name => "node_id",
+        description => "The node ID to lookup",
+        required => 1,
+        pattern => $GRNOC::WebService::Regex::INTEGER
+    );
+    $self->{dispatcher}->register_method($get_diff_text);
+
+    # TODO It's not clear if both is_online and echo are required; Please
+    # investigate.
+    my $is_online = new GRNOC::RabbitMQ::Method(
+        name        => "is_online",
+        description => 'is_online returns 1 if this service is available',
+        async       => 1,
+        callback    => sub {
+            my $method = shift;
+            return $method->{success_callback}({ successful => 1 });
+        }
+    );
+    $self->{dispatcher}->register_method($is_online);
+
+    my $new_switch = new GRNOC::RabbitMQ::Method(
+        name        => 'new_switch',
+        description => 'new_switch adds a new switch to FWDCTL',
+        async       => 1,
+        callback    => sub { $self->new_switch(@_); }
+    );
+    $new_switch->add_input_parameter(
+        name        => 'node_id',
+        description => 'Id of the new node',
+        required    => 1,
+        pattern     => $GRNOC::WebService::Regex::NUMBER_ID
+    );
+    $self->{dispatcher}->register_method($new_switch);
+
+    my $update_cache = GRNOC::RabbitMQ::Method->new(
+        name => 'update_cache',
+        async => 1,
+        callback => sub { $self->update_cache(@_) },
+        description => "Rewrites the connection cache file"
+    );
+    $self->{dispatcher}->register_method($update_cache);
+
+    $self->{dispatcher}->start_consuming;
+    return 1;
+}
+
+=head2 stop
+
+=cut
+sub stop {
+    my $self = shift;
+    $self->{logger}->info('Stopping OESS::NSO::FWDCTL.');
+    $self->{dispatcher}->stop_consuming;
+}
+
 =head2 addVlan
 
 =cut
 sub addVlan {
-    my $self = shift;
-    my $args = {
-        circuit_id => undef,
-        @_
-    };
+    my $self   = shift;
+    my $method = shift;
+    my $params = shift;
 
-    my $conn = new OESS::L2Circuit(
-        db => $self->{db},
-        circuit_id => $args->{circuit_id}
+    my $success = $method->{success_callback};
+    my $error = $method->{error_callback};
+
+    my $err = $self->{fwdctl}->addVlan(
+        circuit_id => $params->{circuit_id}{value}
     );
-    $conn->load_endpoints;
-
-    my $err = $self->{nso}->create_l2connection($conn);
-    return $err if (defined $err);
-
-    $self->{connection_cache}->add_connection($conn, 'l2');
-    return;
+    if (defined $err) {
+        $self->{logger}->error($err);
+        return &$error($err);
+    }
+    return &$success({ status => FWDCTL_SUCCESS });
 }
 
 =head2 deleteVlan
@@ -97,69 +317,62 @@ sub addVlan {
 =cut
 sub deleteVlan {
     my $self   = shift;
-    my $args = {
-        circuit_id => undef,
-        @_
-    };
+    my $method = shift;
+    my $params = shift;
 
-    my $conn = new OESS::L2Circuit(
-        db => $self->{db},
-        circuit_id => $args->{circuit_id}
+    my $success = $method->{success_callback};
+    my $error = $method->{error_callback};
+
+    my $err = $self->{fwdctl}->deleteVlan(
+        circuit_id => $params->{circuit_id}{value}
     );
-    $conn->load_endpoints;
-
-    my $err = $self->{nso}->delete_l2connection($args->{circuit_id});
-    return $err if (defined $err);
-
-    $self->{connection_cache}->remove_connection($conn, 'l2');
-    return;
+    if (defined $err) {
+        $self->{logger}->error($err);
+        return &$error($err);
+    }
+    return &$success({ status => FWDCTL_SUCCESS });
 }
 
 =head2 modifyVlan
 
 =cut
 sub modifyVlan {
-    my $self = shift;
-    my $args = {
-        pending => undef,
-        @_
-    };
+    my $self   = shift;
+    my $method = shift;
+    my $params = shift;
 
-    my $pending_hash = decode_json($args->{pending});
-    my $pending_conn = new OESS::L2Circuit(db => $self->{db}, model => $pending_hash);
+    my $success = $method->{success_callback};
+    my $error = $method->{error_callback};
 
-    my $err = $self->{nso}->edit_l2connection($pending_conn);
-    return $err if (defined $err);
-
-    $self->{connection_cache}->add_connection($conn, 'l2');
-    return;
+    my $err = $self->{fwdctl}->modifyVlan(
+        pending => $params->{pending}{value}
+    );
+    if (defined $err) {
+        $self->{logger}->error($err);
+        return &$error($err);
+    }
+    return &$success({ status => FWDCTL_SUCCESS });
 }
 
 =head2 addVrf
 
 =cut
 sub addVrf {
-    my $self = shift;
-    my $args = {
-        vrf_id => undef,
-        @_
-    };
+    my $self   = shift;
+    my $method = shift;
+    my $params = shift;
 
-    my $conn = new OESS::VRF(
-        db     => $self->{db},
-        vrf_id => $args->{vrf_id}
+    my $success = $method->{success_callback};
+    my $error = $method->{error_callback};
+
+    my $err = $self->{fwdctl}->addVrf(
+        vrf_id => $params->{vrf_id}{value}
     );
-    $conn->load_endpoints;
-
-    foreach my $ep (@{$conn->endpoints}) {
-        $ep->load_peers;
+    if (defined $err) {
+        $self->{logger}->error($err);
+        return &$error($err);
     }
-
-    my $err = $self->{nso}->create_l3connection($conn);
-    return $err if (defined $err);
-
-    $self->{connection_cache}->add_connection($conn, 'l3');
-    return;
+    return &$success({ status => FWDCTL_SUCCESS });
 }
 
 =head2 deleteVrf
@@ -167,22 +380,20 @@ sub addVrf {
 =cut
 sub deleteVrf {
     my $self   = shift;
-    my $args = {
-        vrf_id => undef,
-        @_
-    };
+    my $method = shift;
+    my $params = shift;
 
-    my $conn = new OESS::VRF(
-        db => $self->{db},
-        vrf_id => $args->{vrf_id}
+    my $success = $method->{success_callback};
+    my $error = $method->{error_callback};
+
+    my $err = $self->{fwdctl}->deleteVrf(
+        vrf_id => $params->{vrf_id}{value}
     );
-    $conn->load_endpoints;
-
-    my $err = $self->{nso}->delete_l3connection($args->{vrf_id});
-    return $err if (defined $err);
-
-    $self->{connection_cache}->remove_connection($conn, 'l3');
-    return;
+    if (defined $err) {
+        $self->{logger}->error($err);
+        return &$error($err);
+    }
+    return &$success({ status => FWDCTL_SUCCESS });
 }
 
 =head2 modifyVrf
@@ -190,19 +401,20 @@ sub deleteVrf {
 =cut
 sub modifyVrf {
     my $self   = shift;
-    my $args = {
-        pending => undef,
-        @_
-    };
+    my $method = shift;
+    my $params = shift;
 
-    my $pending_hash = decode_json($args->{pending});
-    my $pending_conn = new OESS::VRF(db => $self->{db}, model => $pending_hash);
+    my $success = $method->{success_callback};
+    my $error = $method->{error_callback};
 
-    my $err = $self->{nso}->edit_l3connection($pending_conn);
-    return $err if (defined $err);
-
-    $self->{connection_cache}->add_connection($conn, 'l3');
-    return;
+    my $err = $self->{fwdctl}->modifyVrf(
+        pending => $params->{pending}{value}
+    );
+    if (defined $err) {
+        $self->{logger}->error($err);
+        return &$error($err);
+    }
+    return &$success({ status => FWDCTL_SUCCESS });
 }
 
 =head2 diff
@@ -373,14 +585,14 @@ sub diff {
 
 =cut
 sub get_diff_text {
-    my $self = shift;
-    my $args = {
-        node_id   => undef,
-        node_name => undef,
-        @_
-    };
+    my $self   = shift;
+    my $method = shift;
+    my $params = shift;
 
-    my $node_id = $args->{node_id};
+    my $success = $method->{success_callback};
+    my $error = $method->{error_callback};
+
+    my $node_id = $params->{node_id}{value};
     my $node_name = "";
 
     my ($connections, $err) = $self->{nso}->get_l2connections();
@@ -406,7 +618,7 @@ sub get_diff_text {
     my $syncd_connections = {};
 
     # Needed to ensure diff state may be set to pending_diff_none after approval
-    foreach my $key (@{$self->{connection_cache}->get_included_nodes}) {
+    foreach my $key (keys %{$self->{cache}}) {
         # TODO Cleanup this hacky lookup
         my $node_obj = new OESS::Node(db => $self->{db}, node_id => $key);
         $network_diff->{$node_obj->name} = "";
@@ -415,19 +627,20 @@ sub get_diff_text {
         }
     }
 
-    foreach my $node_id (@{$self->{connection_cache}->get_included_nodes}) {
-        foreach my $conn (@{$self->{connection_cache}->get_connections_by_node($node_id, 'l2')}) {
+    foreach my $node_id (keys %{$self->{cache}}) {
+        foreach my $conn_id (keys %{$self->{cache}->{$node_id}}) {
 
             # Skip connections if they're already sync'd.
-            next if defined $syncd_connections->{$conn->circuit_id};
-            $syncd_connections->{$conn->circuit_id} = 1;
+            next if defined $syncd_connections->{$conn_id};
+            $syncd_connections->{$conn_id} = 1;
 
             # Compare cached connection against NSO connection. If no difference
             # continue with next connection, otherwise update NSO to align with
             # cache.
+            my $conn = $self->{cache}->{$node_id}->{$conn_id};
             my $diff_required = 0;
 
-            my $diff = $self->_nso_connection_diff($conn, $nso_l2connections->{$conn->circuit_id});
+            my $diff = $self->_nso_connection_diff($conn, $nso_l2connections->{$conn_id});
             foreach my $node (keys %$diff) {
                 next if $diff->{$node} eq "";
 
@@ -435,8 +648,8 @@ sub get_diff_text {
                 $network_diff->{$node} .= $diff->{$node};
             }
 
-            push(@$changes, { type => 'edit-l2connection', value => $conn->circuit_id }) if $diff_required;
-            delete $nso_l2connections->{$conn->circuit_id};
+            push(@$changes, { type => 'edit-l2connection', value => $conn_id }) if $diff_required;
+            delete $nso_l2connections->{$conn_id};
         }
     }
 
@@ -451,14 +664,10 @@ sub get_diff_text {
 
         push @$changes, { type => 'delete-l2connection', value => $conn_id };
     }
-
-    if (defined $args->{node_name}) {
-        $node_name = $args->{node_name};
-    }
     warn 'Network diff:' . Dumper($network_diff);
     warn Dumper($network_diff->{$node_name});
 
-    return $network_diff->{$node_name};
+    return &$success($network_diff->{$node_name});
 }
 
 =head2 new_switch
@@ -496,30 +705,121 @@ sub new_switch {
 
 =head2 update_cache
 
-update_cache reads all connections from the database and loads them
-into an in-memory cache.
+update_cache is a rabbitmq proxy method to _update_cache.
 
 =cut
 sub update_cache {
     my $self   = shift;
+    my $method = shift;
+    my $params = shift;
+
+    my $success = $method->{success_callback};
+    my $error = $method->{error_callback};
+
+    my $err = $self->_update_cache;
+    if (defined $err) {
+        $self->{logger}->error($err);
+        return &$error($err);
+    }
+    return &$success({ status => 1 });
+}
+
+=head2 _update_cache
+
+_update_cache reads all connections from the database and loads them into an
+in-memory cache.
+
+In memory connection cache:
+{
+    "node-id-1": {
+        "conn-id-1": { "eps" : [ "node-id-1", "node-id-2" ] }
+    },
+    "node-id-2": {
+        "conn-id-1": { "eps" : [ "node-id-1", "node-id-2" ] }
+    }
+}
+
+This implies that a connection is stored under each node. This allows us to
+query all connections associated with a single node. Additionally this helps us
+track large changes that may effect multiple connections on a single node.
+
+=cut
+sub _update_cache {
+    my $self = shift;
 
     my $l2connections = OESS::DB::Circuit::fetch_circuits(
         db => $self->{db}
     );
     if (!defined $l2connections) {
-        $self->{logger}->error("Couldn't load l2connections in update_cache.");
         return "Couldn't load l2connections in update_cache.";
     }
 
     foreach my $conn (@$l2connections) {
-        my $obj = new OESS::L2Circuit(db => $self->{db}, model => $conn);
-        $obj->load_endpoints;
-        $self->{connection_cache}->add_connection($obj, 'l2');
+        my $conn_obj = new OESS::L2Circuit(db => $self->{db}, model => $conn);
+        $conn_obj->load_endpoints;
+        $self->_add_connection_to_cache($conn_obj, 'l2');
     }
 
-    # TODO lookup and populate l3connections
-
     return;
+}
+
+=head2 _del_connection_from_cache
+
+_del_connection_in_cache is a simple helper to correctly remove a connection
+object from memory.
+
+=cut
+sub _del_connection_from_cache {
+    my $self = shift;
+    my $conn = shift;
+    my $type = shift;
+
+    my $cache = 'cache';
+    my $flat_cache = 'flat_cache';
+    if ($type eq 'l3') {
+        $cache = 'l3_cache';
+        $flat_cache = 'l3_flat_cache';
+    }
+
+    foreach my $ep (@{$conn->endpoints}) {
+        if (!defined $self->{$cache}->{$ep->node_id}) {
+            next;
+        }
+        delete $self->{$cache}->{$ep->node_id}->{$conn->circuit_id};
+    }
+    delete $self->{$flat_cache}->{$conn->circuit_id};
+
+    return 1;
+}
+
+=head2 _add_connection_to_cache
+
+_add_connection_to_cache is a simple helper to correctly place a connection
+object into memory.
+
+=cut
+sub _add_connection_to_cache {
+    my $self = shift;
+    my $conn = shift;
+    my $type = shift;
+
+    my $cache = 'cache';
+    my $flat_cache = 'flat_cache';
+    if ($type eq 'l3') {
+        $cache = 'l3_cache';
+        $flat_cache = 'l3_flat_cache';
+    }
+
+    foreach my $ep (@{$conn->endpoints}) {
+        if (!defined $self->{$cache}->{$ep->node_id}) {
+            $self->{$cache}->{$ep->node_id} = {};
+        }
+        $self->{$cache}->{$ep->node_id}->{$conn->circuit_id} = $conn;
+    }
+
+    $self->{$flat_cache}->{$conn->circuit_id} = $conn;
+
+    return 1;
 }
 
 =head2 _nso_connection_equal_to_cached
@@ -619,6 +919,10 @@ sub _nso_connection_equal_to_cached {
 
     return 1;
 }
+
+
+
+
 
 =head2 _nso_connection_diff
 
