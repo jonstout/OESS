@@ -1204,15 +1204,6 @@ NSO L2Connection:
 
     {
         'connection_id' => 3000,
-        'directly-modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        },
         'endpoint' => [
             {
                 'bandwidth' => 0,
@@ -1228,19 +1219,7 @@ NSO L2Connection:
                 'tag' => 1,
                 'device' => 'xr0'
             }
-        ],
-        'device-list' => [
-            'xr0'
-        ],
-        'modified' => {
-            'services' => [
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'1\'][sdp:name=\'3000\']',
-                '/i2-common:internal-services/sdp:sdp-attach[sdp:sdp=\'0\'][sdp:name=\'3000\']'
-            ],
-            'devices' => [
-                'xr0'
-            ]
-        }
+        ]
     }
 
 =cut

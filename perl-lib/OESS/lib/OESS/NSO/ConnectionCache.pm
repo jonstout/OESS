@@ -75,10 +75,14 @@ sub add_connection {
     my $type = shift;
 
     my $cache = 'cache';
+    my $conn_id = undef;
     my $flat_cache = 'flat_cache';
     if ($type eq 'l3') {
         $cache = 'l3_cache';
+        $conn_id = $conn->vrf_id;
         $flat_cache = 'l3_flat_cache';
+    } else {
+        $conn_id = $conn->circuit_id;
     }
 
     # Handle case where connection has no endpoints or a connection
@@ -89,10 +93,9 @@ sub add_connection {
         if (!defined $self->{$cache}->{$ep->node_id}) {
             $self->{$cache}->{$ep->node_id} = {};
         }
-        $self->{$cache}->{$ep->node_id}->{$conn->circuit_id} = $conn;
+        $self->{$cache}->{$ep->node_id}->{$conn_id} = $conn;
     }
-
-    $self->{$flat_cache}->{$conn->circuit_id} = $conn;
+    $self->{$flat_cache}->{$conn_id} = $conn;
 
     return 1;
 }
@@ -103,19 +106,23 @@ sub remove_connection {
     my $type = shift;
 
     my $cache = 'cache';
+    my $conn_id = undef;
     my $flat_cache = 'flat_cache';
     if ($type eq 'l3') {
         $cache = 'l3_cache';
+        $conn_id = $conn->vrf_id;
         $flat_cache = 'l3_flat_cache';
+    } else {
+        $conn_id = $conn->circuit_id;
     }
 
     foreach my $ep (@{$conn->endpoints}) {
         if (!defined $self->{$cache}->{$ep->node_id}) {
             next;
         }
-        delete $self->{$cache}->{$ep->node_id}->{$conn->circuit_id};
+        delete $self->{$cache}->{$ep->node_id}->{$conn_id};
     }
-    delete $self->{$flat_cache}->{$conn->circuit_id};
+    delete $self->{$flat_cache}->{$conn_id};
 
     return 1;
 }

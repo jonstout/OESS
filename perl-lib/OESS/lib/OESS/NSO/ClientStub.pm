@@ -189,7 +189,57 @@ sub edit_l3connection {
 sub get_l3connections {
     my $self = shift;
 
-    my $connections  = [];
+    my $connections = [
+        {
+            "connection_id" => 1,
+            "endpoint" => [
+                {
+                    "endpoint_id" => 8,
+                    "vars" => {
+                        "pdp" => "CHIC-JJJ-0",
+                        "ce_id" => 1,
+                        "remote_ce_id" => 2
+                    },
+                    "device" => "Node 11",
+                    "interface" => "e15/6",
+                    "tag" => 300,
+                    "bandwidth" => 200,
+                    "peer_v4" => [
+                        {
+                            "peer_id" => 1,
+                            "local_asn" => 64600,
+                            "local_ip" => "192.168.3.2/31",
+                            "peer_asn" => 64001,
+                            "peer_ip" => "192.168.3.3/31",
+                            "bfd" => 1
+                        }
+                    ]
+                },
+                {
+                    "endpoint_id" => 2,
+                    "vars" => {
+                        "pdp" => "CHIC-JJJ-1",
+                        "ce_id" => 2,
+                        "remote_ce_id" => 1
+                    },
+                    "device" => "xr1",
+                    "interface" => "GigabitEthernet0/1",
+                    "tag" => 300,
+                    "bandwidth" => 100,
+                    "peer_v4" => [
+                        {
+                            "peer_id" => 2,
+                            "local_asn" => 64600,
+                            "local_ip" => "192.168.2.2/31",
+                            "peer_asn" => 64602,
+                            "peer_ip" => "192.168.2.3/31",
+                            "bfd" => 0
+                        }
+                    ]
+                }
+            ]
+        }
+    ];
     return ($connections, undef);
 }
 
