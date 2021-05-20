@@ -590,7 +590,7 @@ NSO L2Connection:
                 "interface" => "GigabitEthernet0/0",
                 "tag" => 300,
                 "bandwidth" => 100,
-                "peer_v4" => [
+                "peer" => [
                     {
                         "peer_id" => 1,
                         "local_asn" => 64600,
@@ -612,7 +612,7 @@ NSO L2Connection:
                 "interface" => "GigabitEthernet0/1",
                 "tag" => 300,
                 "bandwidth" => 100,
-                "peer_v4" => [
+                "peer" => [
                     {
                         "peer_id" => 2,
                         "local_asn" => 64600,
@@ -654,7 +654,7 @@ sub nso_diff {
             $diff->{$ep->{device}} .= "-   Tag:       $ep->{tag}\n";
             $diff->{$ep->{device}} .= "-   Inner Tag: $ep->{inner_tag}\n" if defined $ep->{inner_tag};
 
-            foreach my $peer (@{$ep->{peer_v4}}) {
+            foreach my $peer (@{$ep->{peer}}) {
                 $diff->{$ep->{device}} .= "-   Peer $peer->{peer_id}:\n";
                 $diff->{$ep->{device}} .= "-     Local ASN: $peer->{local_asn}\n";
                 $diff->{$ep->{device}} .= "-     Local IP:  $peer->{local_ip}\n";
@@ -696,7 +696,7 @@ sub nso_diff {
             $index->{$peer->vrf_ep_peer_id} = $peer;
         }
 
-        foreach my $pr (@{$ep->{peer_v4}}) {
+        foreach my $pr (@{$ep->{peer}}) {
             if (!defined $index->{$pr->{peer_id}}) {
                 # Peer should be removed
                 $peer_diff .= "-   Peer $pr->{peer_id}\n";

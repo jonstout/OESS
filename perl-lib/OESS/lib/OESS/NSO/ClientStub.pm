@@ -204,14 +204,15 @@ sub get_l3connections {
                     "interface" => "e15/6",
                     "tag" => 300,
                     "bandwidth" => 200,
-                    "peer_v4" => [
+                    "peer" => [
                         {
                             "peer_id" => 1,
                             "local_asn" => 64600,
                             "local_ip" => "192.168.3.2/31",
                             "peer_asn" => 64001,
                             "peer_ip" => "192.168.3.3/31",
-                            "bfd" => 1
+                            "bfd" => 1,
+                            "ip_version" => "ipv4"
                         }
                     ]
                 },
@@ -226,14 +227,15 @@ sub get_l3connections {
                     "interface" => "GigabitEthernet0/1",
                     "tag" => 300,
                     "bandwidth" => 100,
-                    "peer_v4" => [
+                    "peer" => [
                         {
                             "peer_id" => 2,
                             "local_asn" => 64600,
                             "local_ip" => "192.168.2.2/31",
                             "peer_asn" => 64602,
                             "peer_ip" => "192.168.2.3/31",
-                            "bfd" => 0
+                            "bfd" => 0,
+                            "ip_version" => "ipv4"
                         }
                     ]
                 }
