@@ -20,3 +20,5 @@ COPY perl-lib/OESS/t/conf/passwd.xml /etc/oess/.passwd.xml
 
 COPY perl-lib/OESS/entrypoint.dev.sh /entrypoint.sh
 RUN chmod 777 /entrypoint.sh
+
+CMD ["/entrypoint.sh"]
