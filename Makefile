@@ -1,9 +1,5 @@
 OESS_VERSION=2.0.11
-<<<<<<< Updated upstream
 OESS_NETWORK=oess-network
-=======
-OESS_NETWORK=testenv-nso-arroyo-5.5.1-jonstout
->>>>>>> Stashed changes
 
 container:
 	docker build -f Dockerfile.dev --tag oess:${OESS_VERSION} .
